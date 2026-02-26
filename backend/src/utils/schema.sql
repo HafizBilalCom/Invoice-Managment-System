@@ -1,0 +1,34 @@
+CREATE TABLE users (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  full_name VARCHAR(255) NOT NULL,
+  role ENUM('CONTRACTOR', 'PM', 'FINANCE', 'ADMIN') NOT NULL,
+  provider ENUM('GOOGLE', 'JIRA') NOT NULL,
+  provider_id VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE invoices (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  invoice_number VARCHAR(100) UNIQUE NOT NULL,
+  contractor_id BIGINT NOT NULL,
+  project_name VARCHAR(255) NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  total_hours DECIMAL(10,2) NOT NULL,
+  rate DECIMAL(10,2) NOT NULL,
+  amount DECIMAL(10,2) NOT NULL,
+  status ENUM('PENDING_PM', 'REJECTED_PM', 'APPROVED_PM', 'PAID') NOT NULL,
+  pdf_path VARCHAR(255),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (contractor_id) REFERENCES users(id)
+);
+
+CREATE TABLE invoice_comments (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  invoice_id BIGINT NOT NULL,
+  actor_id BIGINT,
+  comment_text TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (invoice_id) REFERENCES invoices(id)
+);

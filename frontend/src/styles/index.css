@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-[#0f172a] text-slate-100 antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
