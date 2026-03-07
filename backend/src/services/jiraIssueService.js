@@ -171,7 +171,8 @@ async function fetchIssuesForProject({ jiraGet, cloudId, projectKey, requestId }
     const batch = response.data?.issues || [];
     const total = Number(response.data?.total || 0);
     const isLast = Boolean(response.data?.isLast);
-
+    
+    
     issues.push(...batch);
     pageCount += 1;
     startAt += batch.length;
@@ -321,7 +322,8 @@ function buildIssueBasicPayload({
   statusCategory,
   issueType,
   account,
-  accountId
+  accountId,
+  worklogs
 }) {
   return JSON.stringify({
     issueId: issueId || null,
@@ -331,11 +333,12 @@ function buildIssueBasicPayload({
     statusCategory: statusCategory || null,
     issueType: issueType || null,
     account: account || null,
-    accountId: accountId || null
+    accountId: accountId || null,
+    worklogs: worklogs || null
   });
 }
 
-async function upsertIssue(connection, { projectId, issue, account, accountId }) {
+async function upsertIssue(connection, { projectId, issue, account, accountId, worklogs }) {
   const issueKey = issue?.key;
   const issueId = issue?.id ? String(issue.id) : null;
   const summary = issue?.fields?.summary || null;
@@ -350,7 +353,8 @@ async function upsertIssue(connection, { projectId, issue, account, accountId })
     statusCategory,
     issueType,
     account,
-    accountId
+    accountId,
+    worklogs
   });
 
   const [existingRows] = await connection.query(
@@ -438,6 +442,7 @@ async function syncIssuesForProject({ userId, projectId, projectKey, jiraConnect
     let issueUnchanged = 0;
     for (let index = 0; index < issues.length; index += 1) {
       const issue = issues[index];
+      const worklogs = issue?.fields?.worklog || [];
       const accountData = getIssueAccount({
         fields: issue?.fields || {},
         fieldNameMap
@@ -447,7 +452,8 @@ async function syncIssuesForProject({ userId, projectId, projectKey, jiraConnect
         projectId,
         issue,
         account: accountData.account,
-        accountId: accountData.accountId
+        accountId: accountData.accountId,
+        worklogs
       });
 
       issueInserted += upsertIssueResult.inserted;

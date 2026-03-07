@@ -27,6 +27,10 @@ export const timelogApi = {
     const { data } = await api.get('/timelogs', { params });
     return data.timelogs;
   },
+  getSyncStatus: async () => {
+    const { data } = await api.get('/timelogs/sync/status');
+    return data;
+  },
   sync: async (payload) => {
     const { data } = await api.post('/timelogs/sync', payload);
     return data;
@@ -44,6 +48,14 @@ export const projectsApi = {
   },
   syncProjects: async () => {
     const { data } = await api.post('/projects/sync');
+    return data;
+  },
+  syncAllIssues: async () => {
+    const { data } = await api.post('/projects/sync-issues-all');
+    return data;
+  },
+  getSyncAllIssuesStatus: async () => {
+    const { data } = await api.get('/projects/sync-issues-all/status');
     return data;
   },
   syncIssues: async (projectId) => {

@@ -3,6 +3,131 @@ const logger = require('../utils/logger');
 const { syncIssuesForProject } = require('../services/jiraIssueService');
 const { syncAllJiraProjects } = require('../services/jiraProjectService');
 
+const allIssuesSyncState = {
+  running: false,
+  requestId: null,
+  startedAt: null,
+  finishedAt: null,
+  triggeredByUserId: null,
+  totalProjects: 0,
+  processedProjects: 0,
+  successProjects: 0,
+  failedProjects: 0,
+  status: 'IDLE',
+  lastError: null,
+  lastResult: null
+};
+
+async function getLatestJiraConnection(userId) {
+  const [rows] = await db.query(
+    `SELECT access_token, refresh_token, jira_cloud_id
+     FROM oauth_connections
+     WHERE user_id = ? AND provider = 'JIRA'
+     LIMIT 1`,
+    [userId]
+  );
+  return rows[0] || null;
+}
+
+async function runAllProjectIssuesSyncJob({ userId, requestId }) {
+  allIssuesSyncState.running = true;
+  allIssuesSyncState.requestId = requestId;
+  allIssuesSyncState.startedAt = new Date().toISOString();
+  allIssuesSyncState.finishedAt = null;
+  allIssuesSyncState.triggeredByUserId = userId;
+  allIssuesSyncState.totalProjects = 0;
+  allIssuesSyncState.processedProjects = 0;
+  allIssuesSyncState.successProjects = 0;
+  allIssuesSyncState.failedProjects = 0;
+  allIssuesSyncState.status = 'RUNNING';
+  allIssuesSyncState.lastError = null;
+  allIssuesSyncState.lastResult = null;
+
+  try {
+    const [projectRows] = await db.query(
+      'SELECT id, project_key FROM projects ORDER BY id ASC'
+    );
+
+    allIssuesSyncState.totalProjects = projectRows.length;
+
+    logger.info('Project issues all-sync: started', {
+      requestId,
+      userId,
+      totalProjects: projectRows.length
+    });
+
+    for (const project of projectRows) {
+      try {
+        const jiraConnection = await getLatestJiraConnection(userId);
+        if (!jiraConnection?.jira_cloud_id) {
+          throw new Error('Missing Jira connection/cloud id for all-project issues sync');
+        }
+
+        await syncIssuesForProject({
+          userId,
+          projectId: project.id,
+          projectKey: project.project_key,
+          jiraConnection,
+          requestId: `${requestId}-p${project.id}`
+        });
+
+        allIssuesSyncState.successProjects += 1;
+      } catch (error) {
+        allIssuesSyncState.failedProjects += 1;
+        logger.error('Project issues all-sync: project failed', {
+          requestId,
+          userId,
+          projectId: project.id,
+          projectKey: project.project_key,
+          message: error.message,
+          status: error.response?.status,
+          responseData: error.response?.data
+        });
+      } finally {
+        allIssuesSyncState.processedProjects += 1;
+      }
+    }
+
+    allIssuesSyncState.status = 'COMPLETED';
+    allIssuesSyncState.lastResult = {
+      totalProjects: allIssuesSyncState.totalProjects,
+      processedProjects: allIssuesSyncState.processedProjects,
+      successProjects: allIssuesSyncState.successProjects,
+      failedProjects: allIssuesSyncState.failedProjects
+    };
+
+    await db.query(
+      'INSERT INTO audit_logs (user_id, action, metadata) VALUES (?, ?, ?)',
+      [
+        userId,
+        'JIRA_ALL_PROJECT_ISSUES_SYNCED',
+        JSON.stringify({
+          requestId,
+          ...allIssuesSyncState.lastResult
+        })
+      ]
+    );
+
+    logger.info('Project issues all-sync: completed', {
+      requestId,
+      userId,
+      ...allIssuesSyncState.lastResult
+    });
+  } catch (error) {
+    allIssuesSyncState.status = 'FAILED';
+    allIssuesSyncState.lastError = error.message;
+    logger.error('Project issues all-sync: failed', {
+      requestId,
+      userId,
+      message: error.message,
+      stack: error.stack
+    });
+  } finally {
+    allIssuesSyncState.running = false;
+    allIssuesSyncState.finishedAt = new Date().toISOString();
+  }
+}
+
 const listProjects = async (req, res) => {
   const requestId = `project-list-${Date.now()}`;
 
@@ -251,4 +376,59 @@ const listProjectIssues = async (req, res) => {
   }
 };
 
-module.exports = { listProjects, syncProjectIssues, syncProjectsCatalog, listProjectIssues };
+const triggerSyncAllProjectIssues = async (req, res) => {
+  const requestId = `project-issues-sync-all-${Date.now()}`;
+
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    if (allIssuesSyncState.running) {
+      return res.status(202).json({
+        message: 'All-project issues sync is already running',
+        ...allIssuesSyncState
+      });
+    }
+
+    // Fire and forget background job.
+    setImmediate(() => {
+      runAllProjectIssuesSyncJob({ userId, requestId });
+    });
+
+    return res.status(202).json({
+      message: 'All-project issues sync started',
+      requestId,
+      running: true
+    });
+  } catch (error) {
+    logger.error('Project issues all-sync trigger: failed', {
+      requestId,
+      userId: req.user?.id,
+      message: error.message,
+      stack: error.stack
+    });
+
+    return res.status(500).json({
+      message: 'Failed to start all-project issues sync',
+      error: error.message,
+      requestId
+    });
+  }
+};
+
+const getSyncAllProjectIssuesStatus = async (req, res) => {
+  return res.json({
+    ...allIssuesSyncState
+  });
+};
+
+module.exports = {
+  listProjects,
+  syncProjectIssues,
+  syncProjectsCatalog,
+  listProjectIssues,
+  triggerSyncAllProjectIssues,
+  getSyncAllProjectIssuesStatus
+};

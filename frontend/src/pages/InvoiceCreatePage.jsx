@@ -15,6 +15,7 @@ export default function InvoiceCreatePage() {
   const [timelogs, setTimelogs] = useState([]);
   const [message, setMessage] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(null);
 
   const totalHours = useMemo(
     () => timelogs.reduce((sum, item) => sum + Number(item.hours || 0), 0).toFixed(2),
@@ -34,6 +35,40 @@ export default function InvoiceCreatePage() {
     loadTimelogs();
   }, []);
 
+  useEffect(() => {
+    if (!isSyncing) {
+      return undefined;
+    }
+
+    const timer = setInterval(async () => {
+      try {
+        const status = await timelogApi.getSyncStatus();
+        setSyncStatus(status);
+
+        if (!status.running) {
+          setIsSyncing(false);
+          const rows = await timelogApi.list({ from: form.from, to: form.to });
+          setTimelogs(rows);
+
+          if (status.status === 'COMPLETED') {
+            setMessage(
+              `Timelog async sync completed. Synced: ${status.syncedCount}, Inserted: ${status.inserted}, Updated: ${status.updated}, Unchanged: ${status.unchanged}, Skipped(no project ref): ${status.skippedNoProjectReference}, Linked projects: ${status.linkedProjects}, Unlinked: ${status.unlinkedProjects}, Hours: ${status.totalHours}.`
+            );
+          } else {
+            setMessage(
+              `Timelog async sync failed${status.lastError ? ` | ${status.lastError}` : ''}${status.requestId ? ` | requestId: ${status.requestId}` : ''}`
+            );
+          }
+        }
+      } catch (error) {
+        setIsSyncing(false);
+        setMessage(error?.response?.data?.message || 'Failed to fetch timelog sync status');
+      }
+    }, 3000);
+
+    return () => clearInterval(timer);
+  }, [isSyncing, form.from, form.to]);
+
   const onChange = (event) => {
     const { name, value } = event.target;
     setForm((prev) => ({ ...prev, [name]: value }));
@@ -42,13 +77,14 @@ export default function InvoiceCreatePage() {
   const onSubmit = async (event) => {
     event.preventDefault();
     setIsSyncing(true);
-    setMessage('Syncing timelogs from Jira/Tempo...');
+    setMessage('Starting async timelog sync from Jira/Tempo...');
 
     try {
       const response = await timelogApi.sync(form);
-      setTimelogs(response.timelogs || []);
+      const status = await timelogApi.getSyncStatus();
+      setSyncStatus(status);
       setMessage(
-        `Synced ${response.syncedCount} timelogs (${response.totalHours}h) for ${response.from} to ${response.to}. Inserted: ${response.inserted}, Updated: ${response.updated}, Unchanged: ${response.unchanged}. Projects seen: ${response.seenProjects}, inserted: ${response.insertedProjects}, updated: ${response.updatedProjects}.`
+        `${response.message || 'Timelog sync started'}${response.requestId ? ` | requestId: ${response.requestId}` : ''}`
       );
     } catch (error) {
       const backendMessage = error?.response?.data?.message || 'Failed to sync timelogs';
@@ -57,8 +93,9 @@ export default function InvoiceCreatePage() {
       setMessage(
         `${backendMessage}${backendError ? ` | ${backendError}` : ''}${requestId ? ` | requestId: ${requestId}` : ''}`
       );
-    } finally {
       setIsSyncing(false);
+    } finally {
+      // keep isSyncing=true while async job is running; it is cleared by polling when job completes/fails.
     }
   };
 
@@ -94,9 +131,16 @@ export default function InvoiceCreatePage() {
           type="submit"
           disabled={isSyncing}
         >
-          {isSyncing ? 'Syncing...' : 'Sync Timelogs'}
+          {isSyncing ? 'Sync In Progress...' : 'Sync Timelogs (Async)'}
         </button>
         <p className="text-sm text-slate-300">{message}</p>
+        {syncStatus && (
+          <p className="text-xs text-slate-400">
+            Job status: {syncStatus.status || 'UNKNOWN'} | Processed: {syncStatus.syncedCount || 0} | Inserted:{' '}
+            {syncStatus.inserted || 0} | Updated: {syncStatus.updated || 0} | Skipped:{' '}
+            {syncStatus.skippedNoProjectReference || 0}
+          </p>
+        )}
       </form>
 
       <div className="rounded-xl border border-[#2D3748] bg-[#1A2233] p-4">

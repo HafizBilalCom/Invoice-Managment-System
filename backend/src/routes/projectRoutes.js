@@ -5,7 +5,9 @@ const {
   listProjects,
   syncProjectIssues,
   syncProjectsCatalog,
-  listProjectIssues
+  listProjectIssues,
+  triggerSyncAllProjectIssues,
+  getSyncAllProjectIssuesStatus
 } = require('../controllers/projectController');
 
 const router = express.Router();
@@ -14,6 +16,8 @@ router.use(requireAuth);
 router.use(requireJiraConnection);
 router.get('/', listProjects);
 router.post('/sync', syncProjectsCatalog);
+router.post('/sync-issues-all', triggerSyncAllProjectIssues);
+router.get('/sync-issues-all/status', getSyncAllProjectIssuesStatus);
 router.get('/:id/issues', listProjectIssues);
 router.post('/:id/sync-issues', syncProjectIssues);
 

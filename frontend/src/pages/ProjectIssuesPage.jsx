@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { projectsApi } from '../services/api';
 
@@ -8,6 +8,9 @@ export default function ProjectIssuesPage() {
   const [issues, setIssues] = useState([]);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     const load = async () => {
@@ -29,6 +32,31 @@ export default function ProjectIssuesPage() {
     load();
   }, [projectId]);
 
+  const statusOptions = useMemo(
+    () => [...new Set(issues.map((issue) => issue.statusName).filter(Boolean))].sort(),
+    [issues]
+  );
+
+  const typeOptions = useMemo(
+    () => [...new Set(issues.map((issue) => issue.issueType).filter(Boolean))].sort(),
+    [issues]
+  );
+
+  const filteredIssues = useMemo(() => {
+    const term = search.trim().toLowerCase();
+
+    return issues.filter((issue) => {
+      const statusMatches = !statusFilter || issue.statusName === statusFilter;
+      const typeMatches = !typeFilter || issue.issueType === typeFilter;
+
+      const key = String(issue.issueKey || '').toLowerCase();
+      const summary = String(issue.summary || '').toLowerCase();
+      const textMatches = !term || key.includes(term) || summary.includes(term);
+
+      return statusMatches && typeMatches && textMatches;
+    });
+  }, [issues, statusFilter, typeFilter, search]);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -44,9 +72,43 @@ export default function ProjectIssuesPage() {
       </div>
 
       <p className="text-sm text-slate-400">
-        {project?.projectName || 'Selected project'} | Total issues: {issues.length}
+        {project?.projectName || 'Selected project'} | Total issues: {issues.length} | Showing: {filteredIssues.length}
       </p>
       <p className="text-sm text-slate-300">{message}</p>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <input
+          type="text"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search by issue key or summary"
+          className="rounded-md border border-[#2D3748] bg-[#0F172A] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-[#3C50E0] focus:outline-none"
+        />
+        <select
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+          className="rounded-md border border-[#2D3748] bg-[#0F172A] px-3 py-2 text-sm text-slate-100 focus:border-[#3C50E0] focus:outline-none"
+        >
+          <option value="">All Statuses</option>
+          {statusOptions.map((status) => (
+            <option key={status} value={status}>
+              {status}
+            </option>
+          ))}
+        </select>
+        <select
+          value={typeFilter}
+          onChange={(event) => setTypeFilter(event.target.value)}
+          className="rounded-md border border-[#2D3748] bg-[#0F172A] px-3 py-2 text-sm text-slate-100 focus:border-[#3C50E0] focus:outline-none"
+        >
+          <option value="">All Types</option>
+          {typeOptions.map((type) => (
+            <option key={type} value={type}>
+              {type}
+            </option>
+          ))}
+        </select>
+      </div>
 
       <div className="overflow-x-auto rounded-lg border border-[#2D3748]">
         <table className="min-w-full text-sm">
@@ -63,7 +125,7 @@ export default function ProjectIssuesPage() {
           </thead>
           <tbody>
             {!loading &&
-              issues.map((issue) => (
+              filteredIssues.map((issue) => (
                 <tr key={issue.id} className="border-t border-[#2D3748] text-slate-200">
                   <td className="px-4 py-3">{issue.issueKey || '-'}</td>
                   <td className="px-4 py-3">{issue.summary || '-'}</td>
@@ -75,10 +137,10 @@ export default function ProjectIssuesPage() {
                 </tr>
               ))}
 
-            {!loading && issues.length === 0 && (
+            {!loading && filteredIssues.length === 0 && (
               <tr>
                 <td className="px-4 py-4 text-slate-400" colSpan={7}>
-                  No issues found for this project.
+                  No issues found for selected filters.
                 </td>
               </tr>
             )}

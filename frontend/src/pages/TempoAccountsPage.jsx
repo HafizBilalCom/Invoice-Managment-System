@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { tempoAccountsApi } from '../services/api';
 
 export default function TempoAccountsPage() {
   const [accounts, setAccounts] = useState([]);
   const [message, setMessage] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [search, setSearch] = useState('');
 
   const loadAccounts = async () => {
     try {
@@ -43,6 +46,32 @@ export default function TempoAccountsPage() {
     }
   };
 
+  const statusOptions = useMemo(
+    () => [...new Set(accounts.map((account) => account.status).filter(Boolean))].sort(),
+    [accounts]
+  );
+
+  const categoryOptions = useMemo(
+    () => [...new Set(accounts.map((account) => account.category?.name).filter(Boolean))].sort(),
+    [accounts]
+  );
+
+  const filteredAccounts = useMemo(() => {
+    const term = search.trim().toLowerCase();
+
+    return accounts.filter((account) => {
+      const statusMatches = !statusFilter || account.status === statusFilter;
+      const categoryMatches = !categoryFilter || account.category?.name === categoryFilter;
+
+      const key = String(account.key || '').toLowerCase();
+      const name = String(account.name || '').toLowerCase();
+      const customer = String(account.customer?.name || '').toLowerCase();
+      const textMatches = !term || key.includes(term) || name.includes(term) || customer.includes(term);
+
+      return statusMatches && categoryMatches && textMatches;
+    });
+  }, [accounts, statusFilter, categoryFilter, search]);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -64,6 +93,40 @@ export default function TempoAccountsPage() {
 
       <p className="text-sm text-slate-300">{message}</p>
 
+      <div className="grid gap-3 md:grid-cols-3">
+        <input
+          type="text"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search by key, name, customer"
+          className="rounded-md border border-[#2D3748] bg-[#0F172A] px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-[#3C50E0] focus:outline-none"
+        />
+        <select
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+          className="rounded-md border border-[#2D3748] bg-[#0F172A] px-3 py-2 text-sm text-slate-100 focus:border-[#3C50E0] focus:outline-none"
+        >
+          <option value="">All Statuses</option>
+          {statusOptions.map((status) => (
+            <option key={status} value={status}>
+              {status}
+            </option>
+          ))}
+        </select>
+        <select
+          value={categoryFilter}
+          onChange={(event) => setCategoryFilter(event.target.value)}
+          className="rounded-md border border-[#2D3748] bg-[#0F172A] px-3 py-2 text-sm text-slate-100 focus:border-[#3C50E0] focus:outline-none"
+        >
+          <option value="">All Categories</option>
+          {categoryOptions.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </select>
+      </div>
+
       <div className="overflow-x-auto rounded-lg border border-[#2D3748]">
         <table className="min-w-full text-sm">
           <thead className="bg-[#111928] text-left text-slate-300">
@@ -81,7 +144,7 @@ export default function TempoAccountsPage() {
             </tr>
           </thead>
           <tbody>
-            {accounts.map((account) => (
+            {filteredAccounts.map((account) => (
               <tr key={account.id} className="border-t border-[#2D3748] text-slate-200">
                 <td className="px-4 py-3">{account.key || '-'}</td>
                 <td className="px-4 py-3">{account.tempoAccountId}</td>
@@ -96,10 +159,10 @@ export default function TempoAccountsPage() {
               </tr>
             ))}
 
-            {accounts.length === 0 && (
+            {filteredAccounts.length === 0 && (
               <tr>
                 <td className="px-4 py-4 text-slate-400" colSpan={10}>
-                  No Tempo accounts synced yet.
+                  No Tempo accounts found for selected filters.
                 </td>
               </tr>
             )}

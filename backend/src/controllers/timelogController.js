@@ -10,6 +10,16 @@ function mapWorkDate(entry, fallbackFrom) {
   return entry.startDate || entry.dateStarted || entry.updatedAt?.slice(0, 10) || fallbackFrom;
 }
 
+function mapAuthorAccountId(entry) {
+  return (
+    entry?.author?.accountId ||
+    entry?.author?.accountID ||
+    entry?.worker?.accountId ||
+    entry?.worker?.accountID ||
+    null
+  );
+}
+
 function extractAttributeValues(entry) {
   const values = entry?.attributes?.values || [];
   const map = new Map();
@@ -123,67 +133,151 @@ function buildProjectCatalog(entries) {
   return [...catalogByIdentity.values()];
 }
 
-async function loadExistingProjects(connection, catalog) {
-  const projectKeys = [...new Set(catalog.map((p) => p.projectKey).filter(Boolean))];
-  const projectNumbers = [...new Set(catalog.map((p) => p.projectNumber).filter(Boolean))];
-
-  const keyRows = projectKeys.length
-    ? (await connection.query(
-        'SELECT id, project_key, project_name, project_number, project_account_number FROM projects WHERE project_key IN (?)',
-        [projectKeys]
-      ))[0]
-    : [];
-
-  const numberRows = projectNumbers.length
-    ? (await connection.query(
-        'SELECT id, project_key, project_name, project_number, project_account_number FROM projects WHERE project_number IN (?)',
-        [projectNumbers]
-      ))[0]
-    : [];
-
-  const byKey = new Map(keyRows.map((row) => [row.project_key, row]));
-  const byNumber = new Map(numberRows.map((row) => [row.project_number, row]));
-
-  return { byKey, byNumber };
-}
-
-function findProjectRow(project, maps) {
-  if (project.projectNumber && maps.byNumber.has(project.projectNumber)) {
-    return maps.byNumber.get(project.projectNumber);
-  }
-
-  if (project.projectKey && maps.byKey.has(project.projectKey)) {
-    return maps.byKey.get(project.projectKey);
-  }
-
-  return null;
-}
-
 async function mapProjectsFromCatalog(connection, catalog, requestId) {
-  const freshMaps = await loadExistingProjects(connection, catalog);
+  const projectNumbers = [...new Set(catalog.map((p) => p.projectNumber).filter(Boolean))];
   const projectIdMap = new Map();
+  const projectById = new Map();
+  const chainBreakReasons = new Map();
+  let ambiguousProjectNumbers = 0;
 
-  for (const project of catalog) {
-    const row = findProjectRow(project, freshMaps);
-    if (!row) {
-      continue;
+  if (projectNumbers.length > 0) {
+    const projectNumberPlaceholders = projectNumbers.map(() => '?').join(', ');
+    const [tempoRows] = await connection.query(
+      `SELECT account_key, tempo_account_id
+       FROM tempo_accounts
+       WHERE account_key IN (${projectNumberPlaceholders})`,
+      projectNumbers
+    );
+    const tempoByProjectNumber = new Map(tempoRows.map((row) => [String(row.account_key), Number(row.tempo_account_id)]));
+
+    const tempoAccountIds = [...new Set(tempoRows.map((row) => Number(row.tempo_account_id)).filter((id) => Number.isFinite(id) && id > 0))];
+    const jiraByTempoAccountId = new Map();
+
+    if (tempoAccountIds.length > 0) {
+      const tempoAccountPlaceholders = tempoAccountIds.map(() => '?').join(', ');
+      const [jiraRows] = await connection.query(
+        `SELECT account_id, project_id
+         FROM jira_issues
+         WHERE CAST(account_id AS UNSIGNED) IN (${tempoAccountPlaceholders})`,
+        tempoAccountIds
+      );
+
+      for (const row of jiraRows) {
+        const tempoAccountId = Number(row.account_id);
+        if (!Number.isFinite(tempoAccountId) || tempoAccountId <= 0) {
+          continue;
+        }
+
+        if (!jiraByTempoAccountId.has(tempoAccountId)) {
+          jiraByTempoAccountId.set(tempoAccountId, {
+            hasAnyIssue: false,
+            projectIds: new Set()
+          });
+        }
+
+        const aggregate = jiraByTempoAccountId.get(tempoAccountId);
+        aggregate.hasAnyIssue = true;
+        if (row.project_id !== null && row.project_id !== undefined) {
+          const projectId = Number(row.project_id);
+          if (Number.isFinite(projectId) && projectId > 0) {
+            aggregate.projectIds.add(projectId);
+          }
+        }
+      }
     }
 
-    const identity = project.projectNumber || project.projectKey;
-    projectIdMap.set(identity, row.id);
+    for (const projectNumber of projectNumbers) {
+      const tempoAccountId = tempoByProjectNumber.get(projectNumber);
+      if (!tempoAccountId) {
+        chainBreakReasons.set(projectNumber, 'No matching tempo_accounts.account_key row found');
+        continue;
+      }
+
+      const jiraAggregate = jiraByTempoAccountId.get(tempoAccountId);
+      if (!jiraAggregate || !jiraAggregate.hasAnyIssue) {
+        chainBreakReasons.set(
+          projectNumber,
+          `No jira_issues rows found for account_id mapped from tempo_account_id=${tempoAccountId}`
+        );
+        continue;
+      }
+
+      const projectIds = [...jiraAggregate.projectIds];
+      if (projectIds.length === 0) {
+        chainBreakReasons.set(
+          projectNumber,
+          `jira_issues found for tempo_account_id=${tempoAccountId} but project_id is null or invalid`
+        );
+        continue;
+      }
+
+      const selectedProjectId = Math.min(...projectIds);
+      projectIdMap.set(projectNumber, selectedProjectId);
+
+      if (projectIds.length > 1) {
+        ambiguousProjectNumbers += 1;
+        logger.warn('Timelog sync: multiple projects matched same Tempo account key, using smallest project id', {
+          requestId,
+          projectNumber,
+          projectCount: projectIds.length,
+          selectedProjectId
+        });
+      }
+    }
+
+    const projectIds = [...new Set([...projectIdMap.values()])];
+    if (projectIds.length > 0) {
+      const projectIdPlaceholders = projectIds.map(() => '?').join(', ');
+      const [projectRows] = await connection.query(
+        `SELECT id, project_key, project_name, project_number, project_account_number
+         FROM projects
+         WHERE id IN (${projectIdPlaceholders})`,
+        projectIds
+      );
+      for (const row of projectRows) {
+        projectById.set(Number(row.id), row);
+      }
+    }
+
+    for (const [projectNumber, projectId] of projectIdMap.entries()) {
+      if (!projectById.has(Number(projectId))) {
+        chainBreakReasons.set(
+          projectNumber,
+          `Resolved jira_issues.project_id=${projectId} not found in projects table`
+        );
+        projectIdMap.delete(projectNumber);
+      }
+    }
   }
 
-  logger.info('Timelog sync: project reconciliation complete', {
+  const seenProjects = catalog.length;
+  const linkedProjects = projectIdMap.size;
+  const unlinkedProjects = Math.max(seenProjects - linkedProjects, 0);
+
+  logger.info('Timelog sync: project link mapping complete', {
     requestId,
-    seenProjects: catalog.length
+    seenProjects,
+    linkedProjects,
+    unlinkedProjects,
+    ambiguousProjectNumbers
   });
 
-  return { projectIdMap, insertedProjects: 0, updatedProjects: 0, seenProjects: catalog.length };
+  return {
+    projectIdMap,
+    projectById,
+    chainBreakReasons,
+    insertedProjects: 0,
+    updatedProjects: 0,
+    seenProjects,
+    linkedProjects,
+    unlinkedProjects,
+    ambiguousProjectNumbers
+  };
 }
 
-async function getTimelogsForUser(userId, from, to) {
-  const filters = ['te.contractor_user_id = ?'];
-  const values = [userId];
+async function getTimelogsForUser(accountId, from, to) {
+  const filters = ['te.author_account_id = ?'];
+  const values = [accountId];
 
   if (from) {
     filters.push('te.work_date >= ?');
@@ -196,7 +290,7 @@ async function getTimelogsForUser(userId, from, to) {
   }
 
   const [rows] = await db.query(
-    `SELECT te.id, te.external_entry_id, te.work_date, te.hours, te.description,
+    `SELECT te.id, te.external_entry_id, te.author_account_id, te.work_date, te.hours, te.description,
             te.project_key, te.project_name, te.project_number, te.project_account_number,
             te.issue_key, te.created_at, te.updated_at,
             p.id AS project_id, p.project_key AS linked_project_key, p.project_name AS linked_project_name,
@@ -211,6 +305,7 @@ async function getTimelogsForUser(userId, from, to) {
   return rows.map((row) => ({
     id: row.id,
     externalEntryId: row.external_entry_id,
+    authorAccountId: row.author_account_id,
     workDate: row.work_date,
     hours: Number(row.hours),
     description: row.description,
@@ -225,31 +320,52 @@ async function getTimelogsForUser(userId, from, to) {
   }));
 }
 
-const syncTimelogs = async (req, res) => {
-  const requestId = `timelog-sync-${Date.now()}`;
+const timelogSyncStateByUser = new Map();
+
+function getTimelogSyncState(userId) {
+  if (!timelogSyncStateByUser.has(userId)) {
+    timelogSyncStateByUser.set(userId, {
+      running: false,
+      status: 'IDLE',
+      requestId: null,
+      startedAt: null,
+      finishedAt: null,
+      from: null,
+      to: null,
+      syncedCount: 0,
+      inserted: 0,
+      updated: 0,
+      unchanged: 0,
+      skippedNoProjectReference: 0,
+      seenProjects: 0,
+      linkedProjects: 0,
+      unlinkedProjects: 0,
+      ambiguousProjectNumbers: 0,
+      totalHours: 0,
+      lastError: null
+    });
+  }
+
+  return timelogSyncStateByUser.get(userId);
+}
+
+async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId }) {
   const connection = await db.getConnection();
   let transactionStarted = false;
+  const state = getTimelogSyncState(userId);
+
+  state.running = true;
+  state.status = 'RUNNING';
+  state.requestId = requestId;
+  state.startedAt = new Date().toISOString();
+  state.finishedAt = null;
+  state.from = from;
+  state.to = to;
+  state.lastError = null;
 
   try {
-    const { from, to } = req.body;
-    logger.info('Timelog sync: request received', {
-      requestId,
-      userId: req.user?.id,
-      jiraAccountId: req.jiraConnection?.external_account_id,
-      from,
-      to
-    });
-
-    if (!from || !to) {
-      logger.warn('Timelog sync: validation failed', {
-        requestId,
-        reason: 'from and to dates are required'
-      });
-      return res.status(400).json({ message: 'from and to dates are required' });
-    }
-
     const syncResult = await syncTimesheetsDirect({
-      accountId: req.jiraConnection.external_account_id,
+      accountId: jiraAccountId,
       from,
       to,
       requestId
@@ -269,11 +385,12 @@ const syncTimelogs = async (req, res) => {
     const projectCatalog = buildProjectCatalog(entries);
     const projectReconcile = await mapProjectsFromCatalog(connection, projectCatalog, requestId);
 
-    const projectIdByIdentity = projectReconcile.projectIdMap;
+    const projectIdByNumber = projectReconcile.projectIdMap;
 
     let inserted = 0;
     let updated = 0;
     let unchanged = 0;
+    let skippedNoProjectReference = 0;
 
     for (let index = 0; index < entries.length; index += 1) {
       const entry = entries[index];
@@ -283,33 +400,72 @@ const syncTimelogs = async (req, res) => {
       const externalEntryId = getExternalEntryId(entry, index);
       const workDate = mapWorkDate(entry, from);
       const mappedProject = mapProject(entry);
-      const identity = mappedProject.projectNumber || mappedProject.projectKey;
-      const projectId = identity ? projectIdByIdentity.get(identity) || null : null;
+      const projectId = mappedProject.projectNumber ? projectIdByNumber.get(mappedProject.projectNumber) || null : null;
+      const linkedProject = projectId ? projectReconcile.projectById.get(Number(projectId)) : null;
+      const effectiveProject = linkedProject
+        ? {
+            issueKey: mappedProject.issueKey,
+            projectKey: linkedProject.project_key || mappedProject.projectKey,
+            projectName: linkedProject.project_name || mappedProject.projectName,
+            projectNumber: linkedProject.project_number || mappedProject.projectNumber,
+            projectAccountNumber: linkedProject.project_account_number || mappedProject.projectAccountNumber
+          }
+        : mappedProject;
       const rawPayload = JSON.stringify(entry);
+      const authorAccountId = mapAuthorAccountId(entry);
+      const chainBreakReason = mappedProject.projectNumber
+        ? projectReconcile.chainBreakReasons.get(mappedProject.projectNumber) || null
+        : 'Missing _ProjectNumber_ on timesheet entry';
+
+      if (!projectId) {
+        logger.warn('Timelog sync: entry skipped, project chain not resolved', {
+          requestId,
+          externalEntryId,
+          issueKey: mappedProject.issueKey || null,
+          projectNumber: mappedProject.projectNumber || null,
+          reason: chainBreakReason || 'No linked projects.id found through chain'
+        });
+        skippedNoProjectReference += 1;
+        continue;
+      }
 
       const [existingRows] = await connection.query(
-        `SELECT id, project_id, project_key, project_name, project_number, project_account_number,
+        `SELECT id, author_account_id, project_id, project_key, project_name, project_number, project_account_number,
                 issue_key, work_date, hours, description, raw_payload
          FROM timesheet_entries
-         WHERE external_entry_id = ? AND contractor_user_id = ?
+         WHERE external_entry_id = ?
          LIMIT 1`,
-        [externalEntryId, req.user.id]
+        [externalEntryId]
       );
 
       if (!existingRows[0]) {
+        logger.info('Timelog sync: inserting new entry', { externalEntryId,
+            userId,
+            authorAccountId,
+            projectId,
+            projectKey: effectiveProject.projectKey,
+            projectName: effectiveProject.projectName,
+            projectNumber: effectiveProject.projectNumber,
+            projectAccountNumber: effectiveProject.projectAccountNumber,
+            issueKey: effectiveProject.issueKey,
+            workDate,
+            hours,
+            description,
+            rawPayload });
         await connection.query(
           `INSERT INTO timesheet_entries
-          (provider, external_entry_id, contractor_user_id, project_id, project_key, project_name, project_number, project_account_number, issue_key, work_date, hours, description, raw_payload)
-          VALUES ('TEMPO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (provider, external_entry_id, contractor_user_id, author_account_id, project_id, project_key, project_name, project_number, project_account_number, issue_key, work_date, hours, description, raw_payload)
+          VALUES ('TEMPO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             externalEntryId,
-            req.user.id,
+            userId,
+            authorAccountId,
             projectId,
-            mappedProject.projectKey,
-            mappedProject.projectName,
-            mappedProject.projectNumber,
-            mappedProject.projectAccountNumber,
-            mappedProject.issueKey,
+            effectiveProject.projectKey,
+            effectiveProject.projectName,
+            effectiveProject.projectNumber,
+            effectiveProject.projectAccountNumber,
+            effectiveProject.issueKey,
             workDate,
             hours,
             description,
@@ -320,12 +476,13 @@ const syncTimelogs = async (req, res) => {
       } else {
         const existing = existingRows[0];
         const hasChanges =
+          (existing.author_account_id || null) !== (authorAccountId || null) ||
           Number(existing.project_id || 0) !== Number(projectId || 0) ||
-          (existing.project_key || null) !== (mappedProject.projectKey || null) ||
-          (existing.project_name || null) !== (mappedProject.projectName || null) ||
-          (existing.project_number || null) !== (mappedProject.projectNumber || null) ||
-          (existing.project_account_number || null) !== (mappedProject.projectAccountNumber || null) ||
-          (existing.issue_key || null) !== (mappedProject.issueKey || null) ||
+          (existing.project_key || null) !== (effectiveProject.projectKey || null) ||
+          (existing.project_name || null) !== (effectiveProject.projectName || null) ||
+          (existing.project_number || null) !== (effectiveProject.projectNumber || null) ||
+          (existing.project_account_number || null) !== (effectiveProject.projectAccountNumber || null) ||
+          (existing.issue_key || null) !== (effectiveProject.issueKey || null) ||
           toDateOnly(existing.work_date) !== toDateOnly(workDate) ||
           Number(existing.hours) !== Number(hours) ||
           (existing.description || '') !== description ||
@@ -335,6 +492,7 @@ const syncTimelogs = async (req, res) => {
           await connection.query(
             `UPDATE timesheet_entries
              SET project_id = ?,
+                 author_account_id = ?,
                  project_key = ?,
                  project_name = ?,
                  project_number = ?,
@@ -347,11 +505,12 @@ const syncTimelogs = async (req, res) => {
              WHERE id = ?`,
             [
               projectId,
-              mappedProject.projectKey,
-              mappedProject.projectName,
-              mappedProject.projectNumber,
-              mappedProject.projectAccountNumber,
-              mappedProject.issueKey,
+              authorAccountId,
+              effectiveProject.projectKey,
+              effectiveProject.projectName,
+              effectiveProject.projectNumber,
+              effectiveProject.projectAccountNumber,
+              effectiveProject.issueKey,
               workDate,
               hours,
               description,
@@ -372,7 +531,8 @@ const syncTimelogs = async (req, res) => {
           total: entries.length,
           inserted,
           updated,
-          unchanged
+          unchanged,
+          skippedNoProjectReference
         });
       }
     }
@@ -381,7 +541,7 @@ const syncTimelogs = async (req, res) => {
     await connection.query(
       'INSERT INTO audit_logs (user_id, action, metadata) VALUES (?, ?, ?)',
       [
-        req.user.id,
+        userId,
         'TIMELOGS_SYNCED',
         JSON.stringify({
           from,
@@ -390,7 +550,11 @@ const syncTimelogs = async (req, res) => {
           inserted,
           updated,
           unchanged,
+          skippedNoProjectReference,
           seenProjects: projectReconcile.seenProjects,
+          linkedProjects: projectReconcile.linkedProjects,
+          unlinkedProjects: projectReconcile.unlinkedProjects,
+          ambiguousProjectNumbers: projectReconcile.ambiguousProjectNumbers,
           insertedProjects: projectReconcile.insertedProjects,
           updatedProjects: projectReconcile.updatedProjects
         })
@@ -404,36 +568,59 @@ const syncTimelogs = async (req, res) => {
       inserted,
       updated,
       unchanged,
+      skippedNoProjectReference,
       seenProjects: projectReconcile.seenProjects,
+      linkedProjects: projectReconcile.linkedProjects,
+      unlinkedProjects: projectReconcile.unlinkedProjects,
+      ambiguousProjectNumbers: projectReconcile.ambiguousProjectNumbers,
       insertedProjects: projectReconcile.insertedProjects,
       updatedProjects: projectReconcile.updatedProjects
     });
 
-    const timelogs = await getTimelogsForUser(req.user.id, from, to);
+    const timelogs = await getTimelogsForUser(jiraAccountId, from, to);
     logger.info('Timelog sync: response ready', {
       requestId,
       timelogRowsReturned: timelogs.length
     });
 
-    return res.json({
+    const result = {
       from,
       to,
       syncedCount: entries.length,
       inserted,
       updated,
       unchanged,
+      skippedNoProjectReference,
       seenProjects: projectReconcile.seenProjects,
+      linkedProjects: projectReconcile.linkedProjects,
+      unlinkedProjects: projectReconcile.unlinkedProjects,
+      ambiguousProjectNumbers: projectReconcile.ambiguousProjectNumbers,
       insertedProjects: projectReconcile.insertedProjects,
       updatedProjects: projectReconcile.updatedProjects,
       totalHours: Number(syncResult.totalHours.toFixed(2)),
       timelogs,
       requestId
-    });
+    };
+
+    state.status = 'COMPLETED';
+    state.syncedCount = result.syncedCount;
+    state.inserted = result.inserted;
+    state.updated = result.updated;
+    state.unchanged = result.unchanged;
+    state.skippedNoProjectReference = result.skippedNoProjectReference;
+    state.seenProjects = result.seenProjects;
+    state.linkedProjects = result.linkedProjects;
+    state.unlinkedProjects = result.unlinkedProjects;
+    state.ambiguousProjectNumbers = result.ambiguousProjectNumbers;
+    state.totalHours = result.totalHours;
+    state.lastError = null;
+
+    return result;
   } catch (error) {
     logger.error('Timelog sync: failed', {
       requestId,
-      userId: req.user?.id,
-      jiraAccountId: req.jiraConnection?.external_account_id,
+      userId,
+      jiraAccountId,
       message: error.message,
       stack: error.stack,
       status: error.response?.status,
@@ -444,16 +631,65 @@ const syncTimelogs = async (req, res) => {
       await connection.rollback();
       logger.warn('Timelog sync: transaction rolled back', { requestId });
     }
-
-    return res.status(500).json({
-      message: 'Failed to sync timelogs',
-      error: error.message,
-      requestId
-    });
+    state.status = 'FAILED';
+    state.lastError = error.message;
+    throw error;
   } finally {
     connection.release();
+    state.running = false;
+    state.finishedAt = new Date().toISOString();
     logger.info('Timelog sync: DB connection released', { requestId });
   }
+}
+
+const syncTimelogs = async (req, res) => {
+  const requestId = `timelog-sync-${Date.now()}`;
+  const { from, to } = req.body;
+  const userId = req.user?.id;
+  const jiraAccountId = req.jiraConnection?.external_account_id;
+
+  logger.info('Timelog sync trigger: request received', {
+    requestId,
+    userId,
+    jiraAccountId,
+    from,
+    to
+  });
+
+  if (!from || !to) {
+    return res.status(400).json({ message: 'from and to dates are required' });
+  }
+
+  const state = getTimelogSyncState(userId);
+  if (state.running) {
+    return res.status(202).json({
+      message: 'Timelog sync is already running',
+      ...state
+    });
+  }
+
+  setImmediate(async () => {
+    try {
+      await runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId });
+    } catch (error) {
+      logger.error('Timelog sync background job failed', {
+        requestId,
+        userId,
+        message: error.message
+      });
+    }
+  });
+
+  return res.status(202).json({
+    message: 'Timelog sync started',
+    requestId,
+    running: true
+  });
+};
+
+const getSyncTimelogsStatus = async (req, res) => {
+  const state = getTimelogSyncState(req.user?.id);
+  return res.json(state);
 };
 
 const listTimelogs = async (req, res) => {
@@ -461,7 +697,7 @@ const listTimelogs = async (req, res) => {
   try {
     const { from, to } = req.query;
     logger.info('Timelog list: request received', { requestId, userId: req.user?.id, from, to });
-    const timelogs = await getTimelogsForUser(req.user.id, from, to);
+    const timelogs = await getTimelogsForUser(req.jiraConnection.external_account_id, from, to);
     logger.info('Timelog list: response ready', { requestId, rows: timelogs.length });
     return res.json({ timelogs });
   } catch (error) {
@@ -477,5 +713,6 @@ const listTimelogs = async (req, res) => {
 
 module.exports = {
   syncTimelogs,
+  getSyncTimelogsStatus,
   listTimelogs
 };

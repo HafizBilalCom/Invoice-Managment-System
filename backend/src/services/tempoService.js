@@ -1,59 +1,6 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
 
-function normalizeId(value) {
-  if (!value && value !== 0) {
-    return null;
-  }
-
-  return String(value).trim().toLowerCase();
-}
-
-function extractCandidateAccountIds(entry) {
-  const ids = [
-    entry?.worker?.accountId,
-    entry?.worker?.accountID,
-    entry?.worker?.accountKey,
-    entry?.worker?.key,
-    entry?.workerId,
-    entry?.workerID,
-    entry?.author?.accountId,
-    entry?.author?.accountID,
-    entry?.authorId,
-    entry?.authorID,
-    entry?.authorAccountId,
-    entry?.tempoWorker?.accountId,
-    entry?.tempoWorker?.accountID,
-    entry?.attributes?.worker?.accountId,
-    entry?.attributes?.worker?.accountID
-  ]
-    .map(normalizeId)
-    .filter(Boolean);
-
-  return [...new Set(ids)];
-}
-
-function filterEntriesForUser(entries, accountId) {
-  const target = normalizeId(accountId);
-  if (!target) {
-    return { filtered: [], skipped: entries.length };
-  }
-
-  const filtered = [];
-  let skipped = 0;
-
-  for (const entry of entries) {
-    const candidateIds = extractCandidateAccountIds(entry);
-    if (candidateIds.includes(target)) {
-      filtered.push(entry);
-    } else {
-      skipped += 1;
-    }
-  }
-
-  return { filtered, skipped };
-}
-
 function ensureWorkerInNextUrl(nextUrl, accountId) {
   try {
     const parsed = new URL(nextUrl);
@@ -169,21 +116,18 @@ const syncTimesheetsDirect = async ({ accountId, from, to, requestId }) => {
     requestId
   });
 
-  const { filtered, skipped } = filterEntriesForUser(results, accountId);
-  const totalHours = filtered.reduce((sum, item) => sum + Number(item.timeSpentSeconds || 0) / 3600, 0);
+  const totalHours = results.reduce((sum, item) => sum + Number(item.timeSpentSeconds || 0) / 3600, 0);
 
   logger.info('Tempo sync: request completed', {
     requestId,
     accountId,
     pageCount,
-    totalEntriesRaw: results.length,
-    totalEntriesFiltered: filtered.length,
-    skippedEntries: skipped,
+    totalEntriesProcessed: results.length,
     totalHours: Number(totalHours.toFixed(2))
   });
 
   return {
-    entries: filtered,
+    entries: results,
     totalHours
   };
 };

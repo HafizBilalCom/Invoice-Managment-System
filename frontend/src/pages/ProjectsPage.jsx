@@ -7,6 +7,8 @@ export default function ProjectsPage() {
   const [message, setMessage] = useState('');
   const [syncingProjectId, setSyncingProjectId] = useState(null);
   const [syncingProjects, setSyncingProjects] = useState(false);
+  const [syncingAllIssues, setSyncingAllIssues] = useState(false);
+  const [allIssuesStatus, setAllIssuesStatus] = useState(null);
   const [search, setSearch] = useState('');
 
   const loadProjects = async () => {
@@ -23,6 +25,32 @@ export default function ProjectsPage() {
   useEffect(() => {
     loadProjects();
   }, []);
+
+  useEffect(() => {
+    if (!syncingAllIssues) {
+      return undefined;
+    }
+
+    const timer = setInterval(async () => {
+      try {
+        const status = await projectsApi.getSyncAllIssuesStatus();
+        setAllIssuesStatus(status);
+
+        if (!status.running) {
+          setSyncingAllIssues(false);
+          await loadProjects();
+          setMessage(
+            `All issues sync finished. Processed ${status.processedProjects || 0}/${status.totalProjects || 0}, success: ${status.successProjects || 0}, failed: ${status.failedProjects || 0}.`
+          );
+        }
+      } catch (error) {
+        setSyncingAllIssues(false);
+        setMessage(error?.response?.data?.message || 'Failed to read all-issues sync status');
+      }
+    }, 3000);
+
+    return () => clearInterval(timer);
+  }, [syncingAllIssues]);
 
   const totals = useMemo(() => {
     const linkedCount = projects.filter((p) => p.userTimelogCount > 0).length;
@@ -90,23 +118,67 @@ export default function ProjectsPage() {
     }
   };
 
+  const syncAllProjectIssues = async () => {
+    setSyncingAllIssues(true);
+    setMessage('Starting async sync of issues for all projects...');
+
+    try {
+      const trigger = await projectsApi.syncAllIssues();
+      const status = await projectsApi.getSyncAllIssuesStatus();
+      setAllIssuesStatus(status);
+
+      if (!status.running) {
+        setSyncingAllIssues(false);
+      } else {
+        setMessage(
+          `${trigger.message || 'All-project issues sync started'}. Processed ${status.processedProjects || 0}/${status.totalProjects || 0}.`
+        );
+      }
+    } catch (error) {
+      setSyncingAllIssues(false);
+      const backendMessage = error?.response?.data?.message || 'Failed to start all-project issues sync';
+      const backendError = error?.response?.data?.error;
+      const requestId = error?.response?.data?.requestId;
+      setMessage(
+        `${backendMessage}${backendError ? ` | ${backendError}` : ''}${requestId ? ` | requestId: ${requestId}` : ''}`
+      );
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-xl font-semibold text-white">Projects</h2>
-        <button
-          type="button"
-          onClick={syncProjects}
-          disabled={syncingProjects}
-          className="rounded-md bg-[#14A44D] px-3 py-2 text-xs font-semibold text-white hover:bg-[#118a41] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {syncingProjects ? 'Syncing Projects...' : 'Sync Projects'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={syncProjects}
+            disabled={syncingProjects}
+            className="rounded-md bg-[#14A44D] px-3 py-2 text-xs font-semibold text-white hover:bg-[#118a41] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {syncingProjects ? 'Syncing Projects...' : 'Sync Projects'}
+          </button>
+          <button
+            type="button"
+            onClick={syncAllProjectIssues}
+            disabled={syncingAllIssues}
+            className="rounded-md bg-[#F59E0B] px-3 py-2 text-xs font-semibold text-white hover:bg-[#d88908] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {syncingAllIssues ? 'Syncing All Issues...' : 'Sync All Issues'}
+          </button>
+        </div>
       </div>
       <p className="text-sm text-slate-400">
         Project catalog with linked timelog counts and hours for your account only.
       </p>
       <p className="text-sm text-slate-300">{message}</p>
+      {allIssuesStatus && (
+        <p className="text-xs text-slate-400">
+          All-issues job status: {allIssuesStatus.status || 'UNKNOWN'} | Processed:{' '}
+          {allIssuesStatus.processedProjects || 0}/{allIssuesStatus.totalProjects || 0} | Success:{' '}
+          {allIssuesStatus.successProjects || 0} | Failed: {allIssuesStatus.failedProjects || 0}
+        </p>
+      )}
 
       <div className="grid gap-3 md:grid-cols-3">
         <div className="rounded-lg border border-[#2D3748] bg-[#1A2233] p-3">
