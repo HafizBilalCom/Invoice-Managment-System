@@ -96,6 +96,44 @@ export default function InvoiceCreatePage() {
     [filteredTimelogs]
   );
 
+  const groupedTimelogs = useMemo(() => {
+    const groups = new Map();
+
+    filteredTimelogs.forEach((log) => {
+      const groupKey = log.projectId ? `id:${log.projectId}` : `key:${log.projectKey || 'unassigned'}`;
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, {
+          key: groupKey,
+          projectId: log.projectId || null,
+          projectKey: log.projectKey || '-',
+          projectName: log.projectName || 'Unknown Project',
+          projectNumber: log.projectNumber || '-',
+          projectAccountNumber: log.projectAccountNumber || '-',
+          totalHours: 0,
+          rows: []
+        });
+      }
+
+      const group = groups.get(groupKey);
+      group.rows.push(log);
+      group.totalHours += Number(log.hours || 0);
+    });
+
+    return [...groups.values()]
+      .map((group) => ({
+        ...group,
+        totalHours: Number(group.totalHours.toFixed(2)),
+        rows: group.rows.sort((a, b) => {
+          const dateCompare = String(b.workDate || '').localeCompare(String(a.workDate || ''));
+          if (dateCompare !== 0) {
+            return dateCompare;
+          }
+          return Number(b.id || 0) - Number(a.id || 0);
+        })
+      }))
+      .sort((a, b) => `${a.projectKey} ${a.projectName}`.localeCompare(`${b.projectKey} ${b.projectName}`));
+  }, [filteredTimelogs]);
+
   const loadTimelogs = async () => {
     try {
       const rows = await timelogApi.list();
@@ -229,7 +267,8 @@ export default function InvoiceCreatePage() {
       <div className="rounded-xl border border-[#2D3748] bg-[#1A2233] p-4">
         <h3 className="text-base font-semibold text-white">Synced Timelogs</h3>
         <p className="mt-1 text-sm text-slate-400">
-          Rows: {filteredTimelogs.length} / {timelogs.length} | Total Hours: {totalHours}
+          Projects: {groupedTimelogs.length} | Rows: {filteredTimelogs.length} / {timelogs.length} | Total Hours:{' '}
+          {totalHours}
         </p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-4">
@@ -279,41 +318,50 @@ export default function InvoiceCreatePage() {
           />
         </div>
 
-        <div className="mt-4 overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-[#111928] text-left text-slate-300">
-              <tr>
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3">Project</th>
-                <th className="px-4 py-3">Project Number</th>
-                <th className="px-4 py-3">Account Number</th>
-                <th className="px-4 py-3">Issue</th>
-                <th className="px-4 py-3">Hours</th>
-                <th className="px-4 py-3">Description</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredTimelogs.map((log) => (
-                <tr key={log.id} className="border-t border-[#2D3748] text-slate-200">
-                  <td className="px-4 py-3">{log.workDate || '-'}</td>
-                  <td className="px-4 py-3">{log.projectKey || '-'} {log.projectName ? `- ${log.projectName}` : ''}</td>
-                  <td className="px-4 py-3">{log.projectNumber || '-'}</td>
-                  <td className="px-4 py-3">{log.projectAccountNumber || '-'}</td>
-                  <td className="px-4 py-3">{log.issueKey || '-'}</td>
-                  <td className="px-4 py-3">{log.hours}</td>
-                  <td className="px-4 py-3">{log.description || '-'}</td>
-                </tr>
-              ))}
+        <div className="mt-4 space-y-4">
+          {groupedTimelogs.map((group) => (
+            <div key={group.key} className="overflow-x-auto rounded-lg border border-[#3B82F6]/50 bg-[#0B1220] shadow-[0_0_0_1px_rgba(59,130,246,0.2)]">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#3B82F6]/40 bg-[#0F1B33] px-4 py-3">
+                <div>
+                  <p className="text-sm font-bold text-[#E2E8F0]">
+                    {group.projectKey} {group.projectName ? `- ${group.projectName}` : ''}
+                  </p>
+                  <p className="text-xs text-[#93C5FD]">
+                    Project Number: {group.projectNumber} | Account: {group.projectAccountNumber} | Logs:{' '}
+                    {group.rows.length}
+                  </p>
+                </div>
+                <p className="text-sm font-bold text-[#34D399]">Project Hours: {group.totalHours}</p>
+              </div>
 
-              {filteredTimelogs.length === 0 && (
-                <tr>
-                  <td className="px-4 py-4 text-slate-400" colSpan={7}>
-                    No timelogs found for selected filters.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+              <table className="min-w-full text-sm">
+                <thead className="bg-[#101B2E] text-left text-[#CBD5E1]">
+                  <tr>
+                    <th className="px-4 py-3">Date</th>
+                    <th className="px-4 py-3">Issue</th>
+                    <th className="px-4 py-3">Hours</th>
+                    <th className="px-4 py-3">Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {group.rows.map((log) => (
+                    <tr key={log.id} className="border-t border-[#334155] text-[#E2E8F0]">
+                      <td className="px-4 py-3">{log.workDate || '-'}</td>
+                      <td className="px-4 py-3">{log.issueKey || '-'}</td>
+                      <td className="px-4 py-3">{log.hours}</td>
+                      <td className="px-4 py-3">{log.description || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+
+          {groupedTimelogs.length === 0 && (
+            <div className="rounded-lg border border-[#2D3748] bg-[#111928] px-4 py-4 text-sm text-slate-400">
+              No timelogs found for selected filters.
+            </div>
+          )}
         </div>
       </div>
     </div>
