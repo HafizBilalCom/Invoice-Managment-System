@@ -10,16 +10,90 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function toIsoDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getRangeFromPreset(preset) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  if (preset === 'today') {
+    const iso = toIsoDate(today);
+    return { from: iso, to: iso };
+  }
+
+  if (preset === 'last2days') {
+    return { from: toIsoDate(addDays(today, -1)), to: toIsoDate(today) };
+  }
+
+  if (preset === 'thisWeek') {
+    const day = today.getDay();
+    const diffToMonday = day === 0 ? -6 : 1 - day;
+    const monday = addDays(today, diffToMonday);
+    return { from: toIsoDate(monday), to: toIsoDate(today) };
+  }
+
+  if (preset === 'lastWeek') {
+    const day = today.getDay();
+    const diffToMonday = day === 0 ? -6 : 1 - day;
+    const thisMonday = addDays(today, diffToMonday);
+    const lastMonday = addDays(thisMonday, -7);
+    const lastSunday = addDays(thisMonday, -1);
+    return { from: toIsoDate(lastMonday), to: toIsoDate(lastSunday) };
+  }
+
+  return { from: '', to: '' };
+}
+
 export default function InvoiceCreatePage() {
   const [form, setForm] = useState({ ...initialState, to: todayIso() });
   const [timelogs, setTimelogs] = useState([]);
   const [message, setMessage] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
+  const [projectFilter, setProjectFilter] = useState('all');
+  const [rangePreset, setRangePreset] = useState('all');
+  const [viewFrom, setViewFrom] = useState('');
+  const [viewTo, setViewTo] = useState('');
+
+  const projectOptions = useMemo(() => {
+    const map = new Map();
+    timelogs.forEach((log) => {
+      const key = log.projectId ? `id:${log.projectId}` : `key:${log.projectKey || ''}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          value: key,
+          label: `${log.projectKey || '-'}${log.projectName ? ` - ${log.projectName}` : ''}`
+        });
+      }
+    });
+    return [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [timelogs]);
+
+  const filteredTimelogs = useMemo(() => {
+    return timelogs.filter((log) => {
+      const projectMatch =
+        projectFilter === 'all' ||
+        (projectFilter.startsWith('id:') && Number(log.projectId || 0) === Number(projectFilter.replace('id:', ''))) ||
+        (projectFilter.startsWith('key:') && String(log.projectKey || '') === projectFilter.replace('key:', ''));
+
+      const fromMatch = !viewFrom || String(log.workDate || '') >= viewFrom;
+      const toMatch = !viewTo || String(log.workDate || '') <= viewTo;
+
+      return projectMatch && fromMatch && toMatch;
+    });
+  }, [timelogs, projectFilter, viewFrom, viewTo]);
 
   const totalHours = useMemo(
-    () => timelogs.reduce((sum, item) => sum + Number(item.hours || 0), 0).toFixed(2),
-    [timelogs]
+    () => filteredTimelogs.reduce((sum, item) => sum + Number(item.hours || 0), 0).toFixed(2),
+    [filteredTimelogs]
   );
 
   const loadTimelogs = async () => {
@@ -34,6 +108,15 @@ export default function InvoiceCreatePage() {
   useEffect(() => {
     loadTimelogs();
   }, []);
+
+  useEffect(() => {
+    if (rangePreset === 'custom') {
+      return;
+    }
+    const range = getRangeFromPreset(rangePreset);
+    setViewFrom(range.from);
+    setViewTo(range.to);
+  }, [rangePreset]);
 
   useEffect(() => {
     if (!isSyncing) {
@@ -146,8 +229,55 @@ export default function InvoiceCreatePage() {
       <div className="rounded-xl border border-[#2D3748] bg-[#1A2233] p-4">
         <h3 className="text-base font-semibold text-white">Synced Timelogs</h3>
         <p className="mt-1 text-sm text-slate-400">
-          Rows: {timelogs.length} | Total Hours: {totalHours}
+          Rows: {filteredTimelogs.length} / {timelogs.length} | Total Hours: {totalHours}
         </p>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <select
+            value={projectFilter}
+            onChange={(event) => setProjectFilter(event.target.value)}
+            className="rounded-lg border border-[#2D3748] bg-[#111928] px-3 py-2 text-sm text-white"
+          >
+            <option value="all">All Projects</option>
+            {projectOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={rangePreset}
+            onChange={(event) => setRangePreset(event.target.value)}
+            className="rounded-lg border border-[#2D3748] bg-[#111928] px-3 py-2 text-sm text-white"
+          >
+            <option value="all">All Dates</option>
+            <option value="today">Today</option>
+            <option value="last2days">Last 2 Days</option>
+            <option value="thisWeek">This Week</option>
+            <option value="lastWeek">Last Week</option>
+            <option value="custom">Custom Range</option>
+          </select>
+
+          <input
+            type="date"
+            value={viewFrom}
+            onChange={(event) => {
+              setRangePreset('custom');
+              setViewFrom(event.target.value);
+            }}
+            className="rounded-lg border border-[#2D3748] bg-[#111928] px-3 py-2 text-sm text-white"
+          />
+          <input
+            type="date"
+            value={viewTo}
+            onChange={(event) => {
+              setRangePreset('custom');
+              setViewTo(event.target.value);
+            }}
+            className="rounded-lg border border-[#2D3748] bg-[#111928] px-3 py-2 text-sm text-white"
+          />
+        </div>
 
         <div className="mt-4 overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -163,7 +293,7 @@ export default function InvoiceCreatePage() {
               </tr>
             </thead>
             <tbody>
-              {timelogs.map((log) => (
+              {filteredTimelogs.map((log) => (
                 <tr key={log.id} className="border-t border-[#2D3748] text-slate-200">
                   <td className="px-4 py-3">{log.workDate || '-'}</td>
                   <td className="px-4 py-3">{log.projectKey || '-'} {log.projectName ? `- ${log.projectName}` : ''}</td>
@@ -175,10 +305,10 @@ export default function InvoiceCreatePage() {
                 </tr>
               ))}
 
-              {timelogs.length === 0 && (
+              {filteredTimelogs.length === 0 && (
                 <tr>
                   <td className="px-4 py-4 text-slate-400" colSpan={7}>
-                    No timelogs synced yet.
+                    No timelogs found for selected filters.
                   </td>
                 </tr>
               )}
