@@ -5,7 +5,11 @@ export default function ApprovalsPage() {
   const [invoices, setInvoices] = useState([]);
   const [comment, setComment] = useState('');
 
-  const load = () => invoiceApi.list().then(setInvoices).catch(() => setInvoices([]));
+  const load = () =>
+    invoiceApi
+      .list()
+      .then((rows) => setInvoices(rows.filter((invoice) => invoice.statusCode !== 'DRAFT')))
+      .catch(() => setInvoices([]));
 
   useEffect(() => {
     load();

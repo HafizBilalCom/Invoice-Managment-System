@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { projectsApi } from '../services/api';
 
-export default function ProjectsPage() {
+export default function ProjectsPage({ user }) {
   const [projects, setProjects] = useState([]);
   const [message, setMessage] = useState('');
   const [syncingProjectId, setSyncingProjectId] = useState(null);
@@ -149,28 +149,35 @@ export default function ProjectsPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-xl font-semibold text-white">Projects</h2>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={syncProjects}
-            disabled={syncingProjects}
-            className="rounded-md bg-[#14A44D] px-3 py-2 text-xs font-semibold text-white hover:bg-[#118a41] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {syncingProjects ? 'Syncing Projects...' : 'Sync Projects'}
-          </button>
-          <button
-            type="button"
-            onClick={syncAllProjectIssues}
-            disabled={syncingAllIssues}
-            className="rounded-md bg-[#F59E0B] px-3 py-2 text-xs font-semibold text-white hover:bg-[#d88908] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {syncingAllIssues ? 'Syncing All Issues...' : 'Sync All Issues'}
-          </button>
-        </div>
+        {user?.isSuperAdmin ? (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={syncProjects}
+              disabled={syncingProjects}
+              className="rounded-md bg-[#14A44D] px-3 py-2 text-xs font-semibold text-white hover:bg-[#118a41] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {syncingProjects ? 'Syncing Projects...' : 'Sync Projects'}
+            </button>
+            <button
+              type="button"
+              onClick={syncAllProjectIssues}
+              disabled={syncingAllIssues}
+              className="rounded-md bg-[#F59E0B] px-3 py-2 text-xs font-semibold text-white hover:bg-[#d88908] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {syncingAllIssues ? 'Syncing All Issues...' : 'Sync All Issues'}
+            </button>
+          </div>
+        ) : null}
       </div>
       <p className="text-sm text-slate-400">
         Project catalog with linked timelog counts and hours for your account only.
       </p>
+      {!user?.isSuperAdmin ? (
+        <p className="text-sm text-amber-200">
+          Read-only mode. Only the configured super admin can run project and issue sync actions.
+        </p>
+      ) : null}
       <p className="text-sm text-slate-300">{message}</p>
       {allIssuesStatus && (
         <p className="text-xs text-slate-400">
@@ -238,14 +245,18 @@ export default function ProjectsPage() {
                   </Link>
                 </td>
                 <td className="px-4 py-3">
-                  <button
-                    type="button"
-                    onClick={() => syncProjectIssues(project)}
-                    disabled={syncingProjectId === project.id}
-                    className="rounded-md bg-[#3C50E0] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {syncingProjectId === project.id ? 'Syncing...' : 'Sync Issues'}
-                  </button>
+                  {user?.isSuperAdmin ? (
+                    <button
+                      type="button"
+                      onClick={() => syncProjectIssues(project)}
+                      disabled={syncingProjectId === project.id}
+                      className="rounded-md bg-[#3C50E0] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {syncingProjectId === project.id ? 'Syncing...' : 'Sync Issues'}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-slate-500">Super admin only</span>
+                  )}
                 </td>
               </tr>
             ))}

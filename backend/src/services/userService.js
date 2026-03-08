@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { isSuperAdminEmail } = require('../utils/superAdmin');
 
 const DEFAULT_ROLE = 'CONTRACTOR';
 
@@ -57,6 +58,7 @@ function normalizeUser(row, jiraConnection = null) {
     email: row.email,
     name: row.full_name,
     role: row.role,
+    isSuperAdmin: isSuperAdminEmail(row.email),
     provider: row.provider,
     providerId: row.provider_id,
     avatarUrl: row.avatar_url,

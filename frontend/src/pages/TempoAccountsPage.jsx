@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { tempoAccountsApi } from '../services/api';
 
-export default function TempoAccountsPage() {
+export default function TempoAccountsPage({ user }) {
   const [accounts, setAccounts] = useState([]);
   const [message, setMessage] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
@@ -81,16 +81,23 @@ export default function TempoAccountsPage() {
             Daily cron sync plus manual trigger. All account fields are stored in database.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={triggerSync}
-          disabled={isSyncing}
-          className="rounded-lg bg-[#3C50E0] px-4 py-2 text-sm font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {isSyncing ? 'Syncing...' : 'Run Tempo Accounts Sync'}
-        </button>
+        {user?.isSuperAdmin ? (
+          <button
+            type="button"
+            onClick={triggerSync}
+            disabled={isSyncing}
+            className="rounded-lg bg-[#3C50E0] px-4 py-2 text-sm font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSyncing ? 'Syncing...' : 'Run Tempo Accounts Sync'}
+          </button>
+        ) : null}
       </div>
 
+      {!user?.isSuperAdmin ? (
+        <p className="text-sm text-amber-200">
+          Read-only mode. Only the configured super admin can run the Tempo accounts sync.
+        </p>
+      ) : null}
       <p className="text-sm text-slate-300">{message}</p>
 
       <div className="grid gap-3 md:grid-cols-3">

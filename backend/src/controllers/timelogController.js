@@ -20,6 +20,16 @@ function mapAuthorAccountId(entry) {
   );
 }
 
+function mapTempoIssueId(entry) {
+  const value = entry?.issue?.id;
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : null;
+}
+
 function extractAttributeValues(entry) {
   const values = entry?.attributes?.values || [];
   const map = new Map();
@@ -275,6 +285,47 @@ async function mapProjectsFromCatalog(connection, catalog, requestId) {
   };
 }
 
+async function mapJiraIssueReferences(connection, entries, requestId) {
+  const jiraIssueApiIds = [...new Set(entries.map((entry) => mapTempoIssueId(entry)).filter(Boolean))];
+  const jiraIssueRefMap = new Map();
+
+  if (jiraIssueApiIds.length === 0) {
+    logger.info('Timelog sync: no Jira issue ids found in payload for reference mapping', {
+      requestId
+    });
+    return jiraIssueRefMap;
+  }
+
+  const placeholders = jiraIssueApiIds.map(() => '?').join(', ');
+  const [rows] = await connection.query(
+    `SELECT id, jira_issue_id
+     FROM jira_issues
+     WHERE CAST(jira_issue_id AS UNSIGNED) IN (${placeholders})`,
+    jiraIssueApiIds
+  );
+
+  for (const row of rows) {
+    const jiraIssueApiId = Number(row.jira_issue_id);
+    const jiraIssueRefId = Number(row.id);
+
+    if (!Number.isFinite(jiraIssueApiId) || !Number.isFinite(jiraIssueRefId)) {
+      continue;
+    }
+
+    if (!jiraIssueRefMap.has(jiraIssueApiId)) {
+      jiraIssueRefMap.set(jiraIssueApiId, jiraIssueRefId);
+    }
+  }
+
+  logger.info('Timelog sync: Jira issue reference mapping complete', {
+    requestId,
+    issueIdsSeen: jiraIssueApiIds.length,
+    issueRefsLinked: jiraIssueRefMap.size
+  });
+
+  return jiraIssueRefMap;
+}
+
 async function getTimelogsForUser(accountId, from, to) {
   const filters = ['te.author_account_id = ?'];
   const values = [accountId];
@@ -292,10 +343,12 @@ async function getTimelogsForUser(accountId, from, to) {
   const [rows] = await db.query(
     `SELECT te.id, te.external_entry_id, te.author_account_id, te.work_date, te.hours, te.description,
             te.project_key, te.project_name, te.project_number, te.project_account_number,
-            te.issue_key, te.created_at, te.updated_at,
+            te.issue_key, te.jira_issue_api_id, te.jira_issue_ref_id, te.created_at, te.updated_at,
+            ji.issue_key AS linked_issue_key,
             p.id AS project_id, p.project_key AS linked_project_key, p.project_name AS linked_project_name,
             p.project_number AS linked_project_number, p.project_account_number AS linked_project_account_number
      FROM timesheet_entries te
+     LEFT JOIN jira_issues ji ON ji.id = te.jira_issue_ref_id
      LEFT JOIN projects p ON p.id = te.project_id
      WHERE ${filters.join(' AND ')}
      ORDER BY te.work_date DESC, te.id DESC`,
@@ -314,7 +367,9 @@ async function getTimelogsForUser(accountId, from, to) {
     projectName: row.linked_project_name || row.project_name,
     projectNumber: row.linked_project_number || row.project_number,
     projectAccountNumber: row.linked_project_account_number || row.project_account_number,
-    issueKey: row.issue_key,
+    issueKey: row.linked_issue_key || row.issue_key,
+    jiraIssueApiId: row.jira_issue_api_id,
+    jiraIssueRefId: row.jira_issue_ref_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }));
@@ -384,6 +439,7 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
 
     const projectCatalog = buildProjectCatalog(entries);
     const projectReconcile = await mapProjectsFromCatalog(connection, projectCatalog, requestId);
+    const jiraIssueRefMap = await mapJiraIssueReferences(connection, entries, requestId);
 
     const projectIdByNumber = projectReconcile.projectIdMap;
 
@@ -413,6 +469,8 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
         : mappedProject;
       const rawPayload = JSON.stringify(entry);
       const authorAccountId = mapAuthorAccountId(entry);
+      const jiraIssueApiId = mapTempoIssueId(entry);
+      const jiraIssueRefId = jiraIssueApiId ? jiraIssueRefMap.get(jiraIssueApiId) || null : null;
       const chainBreakReason = mappedProject.projectNumber
         ? projectReconcile.chainBreakReasons.get(mappedProject.projectNumber) || null
         : 'Missing _ProjectNumber_ on timesheet entry';
@@ -431,7 +489,7 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
 
       const [existingRows] = await connection.query(
         `SELECT id, author_account_id, project_id, project_key, project_name, project_number, project_account_number,
-                issue_key, work_date, hours, description, raw_payload
+                issue_key, jira_issue_api_id, jira_issue_ref_id, work_date, hours, description, raw_payload
          FROM timesheet_entries
          WHERE external_entry_id = ?
          LIMIT 1`,
@@ -448,14 +506,16 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
             projectNumber: effectiveProject.projectNumber,
             projectAccountNumber: effectiveProject.projectAccountNumber,
             issueKey: effectiveProject.issueKey,
+            jiraIssueApiId,
+            jiraIssueRefId,
             workDate,
             hours,
             description,
             rawPayload });
         await connection.query(
           `INSERT INTO timesheet_entries
-          (provider, external_entry_id, contractor_user_id, author_account_id, project_id, project_key, project_name, project_number, project_account_number, issue_key, work_date, hours, description, raw_payload)
-          VALUES ('TEMPO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (provider, external_entry_id, contractor_user_id, author_account_id, project_id, project_key, project_name, project_number, project_account_number, issue_key, jira_issue_api_id, jira_issue_ref_id, work_date, hours, description, raw_payload)
+          VALUES ('TEMPO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             externalEntryId,
             userId,
@@ -466,6 +526,8 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
             effectiveProject.projectNumber,
             effectiveProject.projectAccountNumber,
             effectiveProject.issueKey,
+            jiraIssueApiId,
+            jiraIssueRefId,
             workDate,
             hours,
             description,
@@ -483,6 +545,8 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
           (existing.project_number || null) !== (effectiveProject.projectNumber || null) ||
           (existing.project_account_number || null) !== (effectiveProject.projectAccountNumber || null) ||
           (existing.issue_key || null) !== (effectiveProject.issueKey || null) ||
+          Number(existing.jira_issue_api_id || 0) !== Number(jiraIssueApiId || 0) ||
+          Number(existing.jira_issue_ref_id || 0) !== Number(jiraIssueRefId || 0) ||
           toDateOnly(existing.work_date) !== toDateOnly(workDate) ||
           Number(existing.hours) !== Number(hours) ||
           (existing.description || '') !== description ||
@@ -498,6 +562,8 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
                  project_number = ?,
                  project_account_number = ?,
                  issue_key = ?,
+                 jira_issue_api_id = ?,
+                 jira_issue_ref_id = ?,
                  work_date = ?,
                  hours = ?,
                  description = ?,
@@ -511,6 +577,8 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
               effectiveProject.projectNumber,
               effectiveProject.projectAccountNumber,
               effectiveProject.issueKey,
+              jiraIssueApiId,
+              jiraIssueRefId,
               workDate,
               hours,
               description,

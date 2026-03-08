@@ -61,6 +61,22 @@ CREATE TABLE IF NOT EXISTS oauth_connections (
   CONSTRAINT fk_oauth_connections_user FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS user_profiles (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  hourly_rate_usd DECIMAL(10,2) NULL,
+  bank_account_title VARCHAR(255) NULL,
+  bank_routing_number VARCHAR(100) NULL,
+  bank_account_number VARCHAR(100) NULL,
+  bank_account_type VARCHAR(100) NULL,
+  bank_name VARCHAR(255) NULL,
+  bank_address VARCHAR(500) NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_user_profiles_user_id (user_id),
+  CONSTRAINT fk_user_profiles_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS tempo_accounts (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   tempo_account_id BIGINT NOT NULL,
@@ -125,7 +141,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   total_hours DECIMAL(10,2) NOT NULL,
   rate DECIMAL(10,2) NOT NULL,
   amount DECIMAL(10,2) NOT NULL,
-  status ENUM('PENDING_PM', 'REJECTED_PM', 'APPROVED_PM', 'PAID') NOT NULL,
+  status ENUM('DRAFT', 'PENDING_PM', 'REJECTED_PM', 'APPROVED_PM', 'PAID') NOT NULL,
   pdf_path VARCHAR(255) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_invoices_contractor FOREIGN KEY (contractor_id) REFERENCES users(id)
@@ -144,7 +160,7 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   invoice_id BIGINT NOT NULL,
   timesheet_entry_id BIGINT NULL,
-  description VARCHAR(255) NOT NULL,
+  description TEXT NOT NULL,
   quantity DECIMAL(10,2) NOT NULL,
   unit_rate DECIMAL(10,2) NOT NULL,
   amount DECIMAL(10,2) NOT NULL,
@@ -240,6 +256,27 @@ CREATE TABLE IF NOT EXISTS jira_issues (
   KEY idx_jira_issues_account (account),
   KEY idx_jira_issues_account_id (account_id),
   CONSTRAINT fk_jira_issues_project FOREIGN KEY (project_id) REFERENCES projects(id)
+);
+
+CREATE TABLE IF NOT EXISTS jira_users (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  account_id VARCHAR(255) NOT NULL,
+  account_type VARCHAR(100) NULL,
+  display_name VARCHAR(255) NULL,
+  email_address VARCHAR(255) NULL,
+  active TINYINT(1) NOT NULL DEFAULT 0,
+  locale VARCHAR(100) NULL,
+  time_zone VARCHAR(100) NULL,
+  self_url VARCHAR(500) NULL,
+  avatar_url VARCHAR(1000) NULL,
+  raw_payload JSON NOT NULL,
+  last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_jira_users_account_id (account_id),
+  KEY idx_jira_users_display_name (display_name),
+  KEY idx_jira_users_email_address (email_address),
+  KEY idx_jira_users_active (active)
 );
 
 INSERT IGNORE INTO roles (id, code, label) VALUES

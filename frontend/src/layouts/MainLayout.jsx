@@ -5,9 +5,12 @@ export default function MainLayout({ user, onLogout, onJiraDisconnect, oauthUrls
 
   const links = [
     { to: '/', label: 'Dashboard', disabled: false },
+    { to: '/profile', label: 'Profile', disabled: false },
     { to: '/timelog-sync', label: 'Step 1: Sync Timelogs', disabled: !user?.jiraConnected },
+    { to: '/invoices', label: 'My Invoices', disabled: !user?.jiraConnected },
     { to: '/projects', label: 'Projects', disabled: !user?.jiraConnected },
     { to: '/tempo-accounts', label: 'Tempo Accounts', disabled: !user?.jiraConnected },
+    { to: '/jira-users', label: 'Jira Users', disabled: !user?.jiraConnected },
     { to: '/approvals', label: 'Approvals', disabled: !user?.jiraConnected }
   ];
 

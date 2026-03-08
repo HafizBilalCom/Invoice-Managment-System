@@ -22,7 +22,7 @@ router.get('/google/callback', (req, res, next) => {
         return next(loginError);
       }
 
-      return res.redirect(process.env.FRONTEND_URL);
+      return res.redirect(`${process.env.FRONTEND_URL}/auth/callback`);
     });
   })(req, res, next);
 });
@@ -31,16 +31,16 @@ router.get(
   '/jira/connect',
   requireAuth,
   passport.authenticate('jira-connect', {
-    scope: ['read:me', 'read:jira-work', 'offline_access'],
+    scope: ['read:me', 'read:jira-work', 'read:jira-user', 'offline_access'],
     state: true
   })
 );
 
 router.get(
   '/jira/callback',
-  passport.authenticate('jira-connect', { failureRedirect: `${process.env.FRONTEND_URL}/?jira=failed` }),
+  passport.authenticate('jira-connect', { failureRedirect: `${process.env.FRONTEND_URL}/auth/callback?jira=failed` }),
   (req, res) => {
-    res.redirect(`${process.env.FRONTEND_URL}/?jira=connected`);
+    res.redirect(`${process.env.FRONTEND_URL}/auth/callback?jira=connected`);
   }
 );
 

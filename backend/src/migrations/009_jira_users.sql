@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS jira_users (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  account_id VARCHAR(255) NOT NULL,
+  account_type VARCHAR(100) NULL,
+  display_name VARCHAR(255) NULL,
+  email_address VARCHAR(255) NULL,
+  active TINYINT(1) NOT NULL DEFAULT 0,
+  locale VARCHAR(100) NULL,
+  time_zone VARCHAR(100) NULL,
+  self_url VARCHAR(500) NULL,
+  avatar_url VARCHAR(1000) NULL,
+  raw_payload JSON NOT NULL,
+  last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_jira_users_account_id (account_id),
+  KEY idx_jira_users_display_name (display_name),
+  KEY idx_jira_users_email_address (email_address),
+  KEY idx_jira_users_active (active)
+);

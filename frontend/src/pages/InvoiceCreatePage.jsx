@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { timelogApi } from '../services/api';
+import { invoiceApi, profileApi, timelogApi } from '../services/api';
 
 const initialState = {
   from: '',
@@ -18,6 +18,24 @@ function addDays(date, days) {
 
 function toIsoDate(date) {
   return date.toISOString().slice(0, 10);
+}
+
+function formatDisplayDate(value) {
+  if (!value) {
+    return '-';
+  }
+
+  const normalized = String(value).slice(0, 10);
+  const date = new Date(`${normalized}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return normalized;
+  }
+
+  return new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  }).format(date);
 }
 
 function getRangeFromPreset(preset) {
@@ -52,7 +70,7 @@ function getRangeFromPreset(preset) {
   return { from: '', to: '' };
 }
 
-export default function InvoiceCreatePage() {
+export default function InvoiceCreatePage({ user }) {
   const [form, setForm] = useState({ ...initialState, to: todayIso() });
   const [timelogs, setTimelogs] = useState([]);
   const [message, setMessage] = useState('');
@@ -62,6 +80,8 @@ export default function InvoiceCreatePage() {
   const [rangePreset, setRangePreset] = useState('thisWeek');
   const [viewFrom, setViewFrom] = useState('');
   const [viewTo, setViewTo] = useState('');
+  const [rateUsd, setRateUsd] = useState('');
+  const [creatingGroupKey, setCreatingGroupKey] = useState('');
 
   const projectOptions = useMemo(() => {
     const map = new Map();
@@ -148,6 +168,20 @@ export default function InvoiceCreatePage() {
   }, []);
 
   useEffect(() => {
+    profileApi
+      .get()
+      .then((response) => {
+        const hourlyRate = response?.profile?.hourlyRateUsd;
+        if (hourlyRate !== null && hourlyRate !== undefined && hourlyRate !== '') {
+          setRateUsd(String(hourlyRate));
+        }
+      })
+      .catch(() => {
+        setRateUsd('');
+      });
+  }, []);
+
+  useEffect(() => {
     if (rangePreset === 'custom') {
       return;
     }
@@ -220,6 +254,49 @@ export default function InvoiceCreatePage() {
     }
   };
 
+  const createInvoiceForGroup = async (group) => {
+    const resolvedRate = Number(rateUsd);
+    if (!Number.isFinite(resolvedRate) || resolvedRate <= 0) {
+      setMessage('Set a valid hourly rate before creating an invoice.');
+      return;
+    }
+
+    const groupDates = group.rows
+      .map((row) => String(row.workDate || ''))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+
+    const startDate = viewFrom || groupDates[0];
+    const endDate = viewTo || groupDates[groupDates.length - 1];
+
+    if (!startDate || !endDate) {
+      setMessage('Could not determine invoice date range from selected project timelogs.');
+      return;
+    }
+
+    setCreatingGroupKey(group.key);
+    setMessage(`Creating invoice for ${group.projectKey || group.projectName}...`);
+
+    try {
+      const invoice = await invoiceApi.syncCreate({
+        projectId: group.projectId || null,
+        projectKey: group.projectId ? null : group.projectKey,
+        startDate,
+        endDate,
+        rate: resolvedRate,
+        timesheetEntryIds: group.rows.map((row) => row.id)
+      });
+
+      setMessage(`Invoice created: ${invoice.invoiceNumber}`);
+    } catch (error) {
+      const backendMessage = error?.response?.data?.message || 'Failed to create invoice';
+      const invoiceNumber = error?.response?.data?.invoiceNumber;
+      setMessage(`${backendMessage}${invoiceNumber ? ` | ${invoiceNumber}` : ''}`);
+    } finally {
+      setCreatingGroupKey('');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <form className="grid gap-4" onSubmit={onSubmit}>
@@ -227,6 +304,12 @@ export default function InvoiceCreatePage() {
         <p className="text-sm text-slate-400">
           Your connected Jira account ID is used automatically. Select date range and sync.
         </p>
+        {!user?.isSuperAdmin ? (
+          <p className="text-sm text-amber-200">
+            Read-only sync mode. Only the configured super admin can start timelog sync jobs. You can still review
+            existing timelogs and create invoices from them.
+          </p>
+        ) : null}
 
         <div className="grid gap-4 md:grid-cols-2">
           <input
@@ -250,7 +333,7 @@ export default function InvoiceCreatePage() {
         <button
           className="w-fit rounded-lg bg-[#3C50E0] px-4 py-2 font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
           type="submit"
-          disabled={isSyncing}
+          disabled={!user?.isSuperAdmin || isSyncing}
         >
           {isSyncing ? 'Sync In Progress...' : 'Sync Timelogs (Async)'}
         </button>
@@ -270,6 +353,21 @@ export default function InvoiceCreatePage() {
           Projects: {groupedTimelogs.length} | Rows: {filteredTimelogs.length} / {timelogs.length} | Total Hours:{' '}
           {totalHours}
         </p>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            value={rateUsd}
+            onChange={(event) => setRateUsd(event.target.value)}
+            placeholder="Invoice Rate (USD)"
+            className="rounded-lg border border-[#2D3748] bg-[#111928] px-3 py-2 text-sm text-white"
+          />
+          <div className="md:col-span-3 flex items-center text-xs text-slate-400">
+            One invoice is created per project using the currently visible date range.
+          </div>
+        </div>
 
         <div className="mt-4 grid gap-3 md:grid-cols-4">
           <select
@@ -331,24 +429,34 @@ export default function InvoiceCreatePage() {
                     {group.rows.length}
                   </p>
                 </div>
-                <p className="text-sm font-bold text-[#34D399]">Project Hours: {group.totalHours}</p>
+                <div className="flex items-center gap-3">
+                  <p className="text-sm font-bold text-[#34D399]">Project Hours: {group.totalHours}</p>
+                  <button
+                    type="button"
+                    onClick={() => createInvoiceForGroup(group)}
+                    disabled={creatingGroupKey === group.key}
+                    className="rounded-lg bg-[#F59E0B] px-3 py-2 text-xs font-semibold text-[#111827] hover:bg-[#FBBF24] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {creatingGroupKey === group.key ? 'Creating...' : 'Create Invoice'}
+                  </button>
+                </div>
               </div>
 
               <table className="min-w-full text-sm">
                 <thead className="bg-[#101B2E] text-left text-[#CBD5E1]">
                   <tr>
-                    <th className="px-4 py-3">Date</th>
-                    <th className="px-4 py-3">Issue</th>
-                    <th className="px-4 py-3">Hours</th>
+                    <th className="w-36 whitespace-nowrap px-4 py-3">Date</th>
+                    <th className="w-40 whitespace-nowrap px-4 py-3">Issue</th>
+                    <th className="w-24 whitespace-nowrap px-4 py-3">Hours</th>
                     <th className="px-4 py-3">Description</th>
                   </tr>
                 </thead>
                 <tbody>
                   {group.rows.map((log) => (
                     <tr key={log.id} className="border-t border-[#334155] text-[#E2E8F0]">
-                      <td className="px-4 py-3">{log.workDate || '-'}</td>
-                      <td className="px-4 py-3">{log.issueKey || '-'}</td>
-                      <td className="px-4 py-3">{log.hours}</td>
+                      <td className="whitespace-nowrap px-4 py-3">{formatDisplayDate(log.workDate)}</td>
+                      <td className="whitespace-nowrap px-4 py-3">{log.issueKey || '-'}</td>
+                      <td className="whitespace-nowrap px-4 py-3">{log.hours}</td>
                       <td className="px-4 py-3">{log.description || '-'}</td>
                     </tr>
                   ))}
