@@ -59,7 +59,7 @@ export default function InvoiceCreatePage() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState(null);
   const [projectFilter, setProjectFilter] = useState('all');
-  const [rangePreset, setRangePreset] = useState('all');
+  const [rangePreset, setRangePreset] = useState('thisWeek');
   const [viewFrom, setViewFrom] = useState('');
   const [viewTo, setViewTo] = useState('');
 
