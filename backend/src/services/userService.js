@@ -16,7 +16,7 @@ async function insertAuditLog(userId, action, metadata = null) {
 
 async function findByProviderId(provider, providerId) {
   const [rows] = await db.query(
-    'SELECT id, email, full_name, role, provider, provider_id, avatar_url, created_at, last_login_at FROM users WHERE provider = ? AND provider_id = ? LIMIT 1',
+    'SELECT id, email, full_name, role, is_project_manager, provider, provider_id, avatar_url, created_at, last_login_at FROM users WHERE provider = ? AND provider_id = ? LIMIT 1',
     [provider, providerId]
   );
   return rows[0] || null;
@@ -28,7 +28,7 @@ async function findByEmail(email) {
   }
 
   const [rows] = await db.query(
-    'SELECT id, email, full_name, role, provider, provider_id, avatar_url, created_at, last_login_at FROM users WHERE email = ? LIMIT 1',
+    'SELECT id, email, full_name, role, is_project_manager, provider, provider_id, avatar_url, created_at, last_login_at FROM users WHERE email = ? LIMIT 1',
     [email]
   );
   return rows[0] || null;
@@ -58,6 +58,7 @@ function normalizeUser(row, jiraConnection = null) {
     email: row.email,
     name: row.full_name,
     role: row.role,
+    isProjectManager: Boolean(row.is_project_manager),
     isSuperAdmin: isSuperAdminEmail(row.email),
     provider: row.provider,
     providerId: row.provider_id,
@@ -97,7 +98,7 @@ async function upsertOAuthUser({ provider, providerId, email, fullName, avatarUr
     await insertAuditLog(user.id, 'USER_LOGIN', { provider });
 
     const [rows] = await db.query(
-      'SELECT id, email, full_name, role, provider, provider_id, avatar_url, created_at, last_login_at FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, email, full_name, role, is_project_manager, provider, provider_id, avatar_url, created_at, last_login_at FROM users WHERE id = ? LIMIT 1',
       [user.id]
     );
     const jiraConnection = await getJiraConnectionByUserId(user.id);
@@ -114,7 +115,7 @@ async function upsertOAuthUser({ provider, providerId, email, fullName, avatarUr
   await insertAuditLog(createdId, 'USER_SIGNUP', { provider });
 
   const [rows] = await db.query(
-    'SELECT id, email, full_name, role, provider, provider_id, avatar_url, created_at, last_login_at FROM users WHERE id = ? LIMIT 1',
+    'SELECT id, email, full_name, role, is_project_manager, provider, provider_id, avatar_url, created_at, last_login_at FROM users WHERE id = ? LIMIT 1',
     [createdId]
   );
   return normalizeUser(rows[0], null);
@@ -174,7 +175,7 @@ async function upsertJiraConnection({
 
 async function getUserById(id) {
   const [rows] = await db.query(
-    'SELECT id, email, full_name, role, provider, provider_id, avatar_url, created_at, last_login_at FROM users WHERE id = ? LIMIT 1',
+    'SELECT id, email, full_name, role, is_project_manager, provider, provider_id, avatar_url, created_at, last_login_at FROM users WHERE id = ? LIMIT 1',
     [id]
   );
 
@@ -201,11 +202,50 @@ async function disconnectJiraConnection(userId) {
   return true;
 }
 
+async function listUsersForManagerFlag() {
+  const [rows] = await db.query(
+    `SELECT id, email, full_name, role, is_project_manager
+     FROM users
+     ORDER BY full_name ASC, email ASC`
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    email: row.email,
+    name: row.full_name,
+    role: row.role,
+    isProjectManager: Boolean(row.is_project_manager)
+  }));
+}
+
+async function setProjectManagerFlag({ userId, isProjectManager }) {
+  await db.query('UPDATE users SET is_project_manager = ? WHERE id = ?', [isProjectManager ? 1 : 0, userId]);
+}
+
+async function listProjectManagers() {
+  const [rows] = await db.query(
+    `SELECT id, email, full_name, role
+     FROM users
+     WHERE is_project_manager = 1
+     ORDER BY full_name ASC, email ASC`
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    email: row.email,
+    name: row.full_name,
+    role: row.role
+  }));
+}
+
 module.exports = {
   upsertOAuthUser,
   upsertJiraConnection,
   disconnectJiraConnection,
   getJiraConnectionByUserId,
   getUserById,
-  touchLastLogin
+  touchLastLogin,
+  listUsersForManagerFlag,
+  setProjectManagerFlag,
+  listProjectManagers
 };

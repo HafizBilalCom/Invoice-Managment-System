@@ -1,17 +1,20 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 
-export default function MainLayout({ user, onLogout, onJiraDisconnect, oauthUrls }) {
+export default function MainLayout({ user, onLogout, onJiraDisconnect, onStopImpersonation, oauthUrls }) {
+  const location = useLocation();
   const navigate = useNavigate();
 
   const links = [
-    { to: '/', label: 'Dashboard', disabled: false },
-    { to: '/profile', label: 'Profile', disabled: false },
-    { to: '/timelog-sync', label: 'Step 1: Sync Timelogs', disabled: !user?.jiraConnected },
-    { to: '/invoices', label: 'My Invoices', disabled: !user?.jiraConnected },
-    { to: '/projects', label: 'Projects', disabled: !user?.jiraConnected },
-    { to: '/tempo-accounts', label: 'Tempo Accounts', disabled: !user?.jiraConnected },
-    { to: '/jira-users', label: 'Jira Users', disabled: !user?.jiraConnected },
-    { to: '/approvals', label: 'Approvals', disabled: !user?.jiraConnected }
+    { to: '/', label: 'Dashboard' },
+    { to: '/profile', label: 'Profile' },
+    ...(user?.isSuperAdmin ? [{ to: '/project-managers', label: 'Project Managers' }] : []),
+    ...(user?.isSuperAdmin ? [{ to: '/approval-workflow', label: 'Approval Workflow' }] : []),
+    { to: '/timelog-sync', label: 'Step 1: Sync Timelogs' },
+    { to: '/invoices', label: 'My Invoices' },
+    { to: '/projects', label: 'Projects' },
+    { to: '/tempo-accounts', label: 'Tempo Accounts' },
+    { to: '/jira-users', label: 'Jira Users' },
+    { to: '/approvals', label: 'Approvals' }
   ];
 
   const handleLogout = async () => {
@@ -22,6 +25,17 @@ export default function MainLayout({ user, onLogout, onJiraDisconnect, oauthUrls
   const handleDisconnect = async () => {
     await onJiraDisconnect();
     navigate('/', { replace: true });
+  };
+
+  const currentPath = location.pathname;
+  const detailSource = location.state?.from || null;
+
+  const isLinkActive = (linkTo, isNavActive) => {
+    if (currentPath.startsWith('/invoices/') && detailSource === '/approvals') {
+      return linkTo === '/approvals';
+    }
+
+    return isNavActive;
   };
 
   return (
@@ -53,18 +67,6 @@ export default function MainLayout({ user, onLogout, onJiraDisconnect, oauthUrls
 
         <nav className="mt-6 space-y-2">
           {links.map((item) => {
-            if (item.disabled) {
-              return (
-                <div
-                  key={item.to}
-                  className="cursor-not-allowed rounded-lg px-4 py-2 text-sm font-medium text-slate-500"
-                  title="Connect Jira first"
-                >
-                  {item.label} (Locked)
-                </div>
-              );
-            }
-
             return (
               <NavLink
                 key={item.to}
@@ -72,7 +74,9 @@ export default function MainLayout({ user, onLogout, onJiraDisconnect, oauthUrls
                 end={item.to === '/'}
                 className={({ isActive }) =>
                   `block rounded-lg px-4 py-2 text-sm font-medium transition ${
-                    isActive ? 'bg-[#3C50E0] text-white' : 'text-slate-300 hover:bg-[#1f2a3a]'
+                    isLinkActive(item.to, isActive)
+                      ? 'bg-[#3C50E0] text-white'
+                      : 'text-slate-300 hover:bg-[#1f2a3a]'
                   }`
                 }
               >
@@ -84,6 +88,22 @@ export default function MainLayout({ user, onLogout, onJiraDisconnect, oauthUrls
       </aside>
 
       <main className="w-full p-4 md:p-8">
+        {user?.isImpersonating ? (
+          <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-amber-100">
+                Impersonating {user.name} ({user.email || 'no-email'}) as {user.impersonator?.name || 'Super Admin'}.
+              </p>
+              <button
+                type="button"
+                onClick={onStopImpersonation}
+                className="rounded-lg border border-amber-400/40 bg-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-100 hover:bg-amber-500/30"
+              >
+                Stop Impersonation
+              </button>
+            </div>
+          </div>
+        ) : null}
         <header className="mb-6 rounded-xl border border-[#2D3748] bg-[#111928] p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>

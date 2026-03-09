@@ -7,9 +7,8 @@ const { syncTimelogs, getSyncTimelogsStatus, listTimelogs } = require('../contro
 const router = express.Router();
 
 router.use(requireAuth);
-router.use(requireJiraConnection);
-router.get('/', listTimelogs);
+router.get('/', requireJiraConnection, listTimelogs);
 router.get('/sync/status', getSyncTimelogsStatus);
-router.post('/sync', requireSuperAdmin, syncTimelogs);
+router.post('/sync', requireSuperAdmin, requireJiraConnection, syncTimelogs);
 
 module.exports = router;

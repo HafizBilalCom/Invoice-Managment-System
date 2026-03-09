@@ -13,8 +13,9 @@ import ProjectsPage from './pages/ProjectsPage';
 import ProjectIssuesPage from './pages/ProjectIssuesPage';
 import TempoAccountsPage from './pages/TempoAccountsPage';
 import JiraUsersPage from './pages/JiraUsersPage';
+import ProjectManagersPage from './pages/ProjectManagersPage';
+import ApprovalWorkflowPage from './pages/ApprovalWorkflowPage';
 import ProtectedRoute from './components/ProtectedRoute';
-import RequireJiraConnection from './components/RequireJiraConnection';
 import { authApi } from './services/api';
 
 export default function App() {
@@ -47,6 +48,16 @@ export default function App() {
     await checkSession();
   };
 
+  const handleImpersonate = async (targetUserId) => {
+    await authApi.impersonate(targetUserId);
+    await checkSession();
+  };
+
+  const handleStopImpersonation = async () => {
+    await authApi.stopImpersonation();
+    await checkSession();
+  };
+
   return (
     <Routes>
       <Route path="/login" element={<LoginPage user={user} isLoading={isLoading} oauthUrls={authApi} />} />
@@ -60,6 +71,7 @@ export default function App() {
               user={user}
               onLogout={handleLogout}
               onJiraDisconnect={handleJiraDisconnect}
+              onStopImpersonation={handleStopImpersonation}
               oauthUrls={authApi}
             />
           </ProtectedRoute>
@@ -75,67 +87,43 @@ export default function App() {
         />
         <Route
           path="timelog-sync"
-          element={
-            <RequireJiraConnection user={user}>
-              <InvoiceCreatePage user={user} />
-            </RequireJiraConnection>
-          }
+          element={<InvoiceCreatePage user={user} />}
         />
         <Route
           path="invoices"
-          element={
-            <RequireJiraConnection user={user}>
-              <InvoicesPage />
-            </RequireJiraConnection>
-          }
+          element={<InvoicesPage />}
         />
         <Route
           path="invoices/:invoiceId"
-          element={
-            <RequireJiraConnection user={user}>
-              <InvoiceDetailPage />
-            </RequireJiraConnection>
-          }
+          element={<InvoiceDetailPage />}
         />
         <Route
           path="projects"
-          element={
-            <RequireJiraConnection user={user}>
-              <ProjectsPage user={user} />
-            </RequireJiraConnection>
-          }
+          element={<ProjectsPage user={user} />}
         />
         <Route
           path="projects/:projectId/issues"
-          element={
-            <RequireJiraConnection user={user}>
-              <ProjectIssuesPage />
-            </RequireJiraConnection>
-          }
+          element={<ProjectIssuesPage />}
         />
         <Route
           path="tempo-accounts"
-          element={
-            <RequireJiraConnection user={user}>
-              <TempoAccountsPage user={user} />
-            </RequireJiraConnection>
-          }
+          element={<TempoAccountsPage user={user} />}
         />
         <Route
           path="jira-users"
-          element={
-            <RequireJiraConnection user={user}>
-              <JiraUsersPage user={user} />
-            </RequireJiraConnection>
-          }
+          element={<JiraUsersPage user={user} />}
+        />
+        <Route
+          path="project-managers"
+          element={<ProjectManagersPage user={user} onImpersonate={handleImpersonate} />}
+        />
+        <Route
+          path="approval-workflow"
+          element={<ApprovalWorkflowPage user={user} />}
         />
         <Route
           path="approvals"
-          element={
-            <RequireJiraConnection user={user}>
-              <ApprovalsPage />
-            </RequireJiraConnection>
-          }
+          element={<ApprovalsPage user={user} />}
         />
       </Route>
 

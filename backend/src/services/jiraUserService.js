@@ -2,6 +2,15 @@ const axios = require('axios');
 const db = require('../config/db');
 const logger = require('../utils/logger');
 
+function isValidEmail(email) {
+  const value = String(email || '').trim();
+  if (!value) {
+    return false;
+  }
+
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
 async function refreshJiraAccessToken({ userId, refreshToken, requestId }) {
   const response = await axios.post(
     process.env.JIRA_TOKEN_URL,
@@ -73,11 +82,13 @@ async function withJiraGet({ userId, jiraConnection, requestId, url, params }) {
 }
 
 function normalizeJiraUser(user) {
+  const normalizedEmail = String(user.emailAddress || '').trim();
+
   return {
     accountId: String(user.accountId || ''),
     accountType: user.accountType || null,
     displayName: user.displayName || null,
-    emailAddress: user.emailAddress || null,
+    emailAddress: normalizedEmail || null,
     active: Boolean(user.active),
     locale: user.locale || null,
     timeZone: user.timeZone || null,
@@ -85,6 +96,56 @@ function normalizeJiraUser(user) {
     avatarUrl: user.avatarUrls?.['48x48'] || user.avatarUrls?.['24x24'] || null,
     rawPayload: user
   };
+}
+
+async function upsertActiveJiraUsersIntoSystemUsers({ users, requestId, syncUserId }) {
+  const activeUsers = users.filter((user) => user.active && isValidEmail(user.emailAddress));
+  if (activeUsers.length === 0) {
+    return { createdSystemUsers: 0 };
+  }
+
+  const normalizedEmails = [...new Set(activeUsers.map((user) => String(user.emailAddress).trim().toLowerCase()))];
+  const [existingRows] = await db.query(
+    `SELECT email
+     FROM users
+     WHERE LOWER(email) IN (?)`,
+    [normalizedEmails]
+  );
+  const existingEmailSet = new Set(existingRows.map((row) => String(row.email || '').trim().toLowerCase()));
+
+  let createdSystemUsers = 0;
+  for (const user of activeUsers) {
+    const normalizedEmail = String(user.emailAddress).trim().toLowerCase();
+    if (existingEmailSet.has(normalizedEmail)) {
+      continue;
+    }
+
+    await db.query(
+      `INSERT INTO users (email, full_name, role, provider, provider_id, avatar_url, is_project_manager, last_login_at)
+       VALUES (?, ?, 'CONTRACTOR', NULL, NULL, NULL, 0, NULL)`,
+      [user.emailAddress, user.displayName || user.emailAddress]
+    );
+    existingEmailSet.add(normalizedEmail);
+    createdSystemUsers += 1;
+  }
+
+  if (createdSystemUsers > 0) {
+    await db.query(
+      'INSERT INTO audit_logs (user_id, action, metadata) VALUES (?, ?, ?)',
+      [
+        syncUserId,
+        'JIRA_USERS_AUTO_PROVISIONED',
+        JSON.stringify({ requestId, createdSystemUsers })
+      ]
+    );
+    logger.info('Jira users sync: auto-provisioned system users', {
+      requestId,
+      syncUserId,
+      createdSystemUsers
+    });
+  }
+
+  return { createdSystemUsers };
 }
 
 async function syncJiraUsers({ userId, jiraConnection, requestId }) {
@@ -101,6 +162,8 @@ async function syncJiraUsers({ userId, jiraConnection, requestId }) {
   let inserted = 0;
   let updated = 0;
   let unchanged = 0;
+  let skippedInvalidEmail = 0;
+  let createdSystemUsers = 0;
 
   logger.info('Jira users sync: started', {
     requestId,
@@ -140,8 +203,23 @@ async function syncJiraUsers({ userId, jiraConnection, requestId }) {
       .map(normalizeJiraUser)
       .filter((item) => Boolean(item.accountId));
 
-    if (normalizedUsers.length > 0) {
-      const accountIds = normalizedUsers.map((item) => item.accountId);
+    const usersWithValidEmail = normalizedUsers.filter((item) => {
+      const valid = isValidEmail(item.emailAddress);
+      if (!valid) {
+        skippedInvalidEmail += 1;
+      }
+      return valid;
+    });
+
+    if (usersWithValidEmail.length > 0) {
+      const autoProvisionResult = await upsertActiveJiraUsersIntoSystemUsers({
+        users: usersWithValidEmail,
+        requestId,
+        syncUserId: userId
+      });
+      createdSystemUsers += Number(autoProvisionResult.createdSystemUsers || 0);
+
+      const accountIds = usersWithValidEmail.map((item) => item.accountId);
       const [existingRows] = await db.query(
         `SELECT account_id, account_type, display_name, email_address, active, locale, time_zone, self_url, avatar_url
          FROM jira_users
@@ -150,7 +228,7 @@ async function syncJiraUsers({ userId, jiraConnection, requestId }) {
       );
       const existingMap = new Map(existingRows.map((row) => [row.account_id, row]));
 
-      for (const user of normalizedUsers) {
+      for (const user of usersWithValidEmail) {
         const existing = existingMap.get(user.accountId);
         if (!existing) {
           await db.query(
@@ -240,7 +318,16 @@ async function syncJiraUsers({ userId, jiraConnection, requestId }) {
     [
       userId,
       'JIRA_USERS_SYNCED',
-      JSON.stringify({ requestId, pageCount, totalFetched, inserted, updated, unchanged })
+      JSON.stringify({
+        requestId,
+        pageCount,
+        totalFetched,
+        inserted,
+        updated,
+        unchanged,
+        skippedInvalidEmail,
+        createdSystemUsers
+      })
     ]
   );
 
@@ -251,10 +338,12 @@ async function syncJiraUsers({ userId, jiraConnection, requestId }) {
     totalFetched,
     inserted,
     updated,
-    unchanged
+    unchanged,
+    skippedInvalidEmail,
+    createdSystemUsers
   });
 
-  return { pageCount, totalFetched, inserted, updated, unchanged };
+  return { pageCount, totalFetched, inserted, updated, unchanged, skippedInvalidEmail, createdSystemUsers };
 }
 
 async function listJiraUsers() {

@@ -6,6 +6,7 @@ const projectRoutes = require('./projectRoutes');
 const tempoAccountRoutes = require('./tempoAccountRoutes');
 const profileRoutes = require('./profileRoutes');
 const jiraUserRoutes = require('./jiraUserRoutes');
+const workflowRoutes = require('./workflowRoutes');
 
 const router = express.Router();
 
@@ -16,5 +17,6 @@ router.use('/tempo', tempoAccountRoutes);
 router.use('/invoices', invoiceRoutes);
 router.use('/profile', profileRoutes);
 router.use('/jira-users', jiraUserRoutes);
+router.use('/workflow', workflowRoutes);
 
 module.exports = router;

@@ -14,12 +14,11 @@ const {
 const router = express.Router();
 
 router.use(requireAuth);
-router.use(requireJiraConnection);
 router.get('/', listProjects);
-router.post('/sync', requireSuperAdmin, syncProjectsCatalog);
-router.post('/sync-issues-all', requireSuperAdmin, triggerSyncAllProjectIssues);
+router.post('/sync', requireSuperAdmin, requireJiraConnection, syncProjectsCatalog);
+router.post('/sync-issues-all', requireSuperAdmin, requireJiraConnection, triggerSyncAllProjectIssues);
 router.get('/sync-issues-all/status', getSyncAllProjectIssuesStatus);
 router.get('/:id/issues', listProjectIssues);
-router.post('/:id/sync-issues', requireSuperAdmin, syncProjectIssues);
+router.post('/:id/sync-issues', requireSuperAdmin, requireJiraConnection, syncProjectIssues);
 
 module.exports = router;

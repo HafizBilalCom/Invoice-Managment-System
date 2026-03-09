@@ -310,6 +310,11 @@ export default function InvoiceCreatePage({ user }) {
             existing timelogs and create invoices from them.
           </p>
         ) : null}
+        {user?.isSuperAdmin && !user?.jiraConnected ? (
+          <p className="text-sm text-amber-200">
+            Connect Jira to run timelog sync. Other invoice actions remain available.
+          </p>
+        ) : null}
 
         <div className="grid gap-4 md:grid-cols-2">
           <input
@@ -333,7 +338,7 @@ export default function InvoiceCreatePage({ user }) {
         <button
           className="w-fit rounded-lg bg-[#3C50E0] px-4 py-2 font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
           type="submit"
-          disabled={!user?.isSuperAdmin || isSyncing}
+          disabled={!user?.isSuperAdmin || !user?.jiraConnected || isSyncing}
         >
           {isSyncing ? 'Sync In Progress...' : 'Sync Timelogs (Async)'}
         </button>

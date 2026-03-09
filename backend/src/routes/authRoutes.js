@@ -1,7 +1,14 @@
 const express = require('express');
 const passport = require('passport');
-const { getSessionUser, logout, disconnectJira } = require('../controllers/authController');
+const {
+  getSessionUser,
+  logout,
+  disconnectJira,
+  startImpersonation,
+  stopImpersonation
+} = require('../controllers/authController');
 const requireAuth = require('../middleware/requireAuth');
+const requireSuperAdmin = require('../middleware/requireSuperAdmin');
 
 const router = express.Router();
 
@@ -46,6 +53,8 @@ router.get(
 
 router.get('/me', getSessionUser);
 router.post('/jira/disconnect', requireAuth, disconnectJira);
+router.post('/impersonate/stop', requireAuth, stopImpersonation);
+router.post('/impersonate/:userId', requireAuth, requireSuperAdmin, startImpersonation);
 router.post('/logout', logout);
 
 module.exports = router;

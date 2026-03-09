@@ -6,6 +6,7 @@ const {
   mapProfileResponse,
   nullIfBlank
 } = require('../services/profileService');
+const { listUsersForManagerFlag, setProjectManagerFlag } = require('../services/userService');
 
 const getProfile = async (req, res) => {
   if (!req.user?.id) {
@@ -165,7 +166,33 @@ const updateProfile = async (req, res) => {
   return res.json(mapProfileResponse(user, profileRow));
 };
 
+const listManagerCandidates = async (req, res) => {
+  const users = await listUsersForManagerFlag();
+  return res.json({ users });
+};
+
+const updateManagerCandidate = async (req, res) => {
+  const targetUserId = Number(req.params.userId);
+  const isProjectManager = Boolean(req.body?.isProjectManager);
+
+  if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+    return res.status(400).json({ message: 'Invalid user id' });
+  }
+
+  await setProjectManagerFlag({ userId: targetUserId, isProjectManager });
+
+  await db.query('INSERT INTO audit_logs (user_id, action, metadata) VALUES (?, ?, ?)', [
+    req.user.id,
+    'PROJECT_MANAGER_FLAG_UPDATED',
+    JSON.stringify({ targetUserId, isProjectManager })
+  ]);
+
+  return res.json({ message: 'Project manager flag updated' });
+};
+
 module.exports = {
   getProfile,
-  updateProfile
+  updateProfile,
+  listManagerCandidates,
+  updateManagerCandidate
 };

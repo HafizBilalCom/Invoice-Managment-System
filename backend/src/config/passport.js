@@ -7,7 +7,12 @@ const { upsertOAuthUser, upsertJiraConnection, getUserById } = require('../servi
 
 passport.serializeUser((user, done) => done(null, user.id));
 passport.deserializeUser(async (id, done) => {
-  done(null, { id });
+  try {
+    const user = await getUserById(id);
+    done(null, user || false);
+  } catch (error) {
+    done(error);
+  }
 });
 
 passport.use(

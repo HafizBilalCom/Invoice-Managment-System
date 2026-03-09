@@ -16,6 +16,14 @@ export const authApi = {
   logout: async () => {
     await api.post('/auth/logout');
   },
+  impersonate: async (userId) => {
+    const { data } = await api.post(`/auth/impersonate/${userId}`);
+    return data.user;
+  },
+  stopImpersonation: async () => {
+    const { data } = await api.post('/auth/impersonate/stop');
+    return data.user;
+  },
   disconnectJira: async () => {
     await api.post('/auth/jira/disconnect');
   },
@@ -100,8 +108,12 @@ export const invoiceApi = {
     const { data } = await api.post('/invoices/sync-create', payload);
     return data.invoice;
   },
-  submit: async (id) => {
-    const { data } = await api.post(`/invoices/${id}/submit`);
+  listApprovers: async () => {
+    const { data } = await api.get('/invoices/approvers');
+    return data.approvers;
+  },
+  submit: async (id, payload) => {
+    const { data } = await api.post(`/invoices/${id}/submit`, payload);
     return data.invoice;
   },
   regeneratePdf: async (id) => {
@@ -110,6 +122,10 @@ export const invoiceApi = {
   },
   updateStatus: async (id, payload) => {
     const { data } = await api.patch(`/invoices/${id}/status`, payload);
+    return data.invoice;
+  },
+  addComment: async (id, payload) => {
+    const { data } = await api.post(`/invoices/${id}/comment`, payload);
     return data.invoice;
   },
   pdfUrl: (pdfPath) => {
@@ -129,6 +145,25 @@ export const profileApi = {
   update: async (payload) => {
     const { data } = await api.put('/profile', payload);
     return data;
+  },
+  listManagerCandidates: async () => {
+    const { data } = await api.get('/profile/manager-candidates');
+    return data.users;
+  },
+  setManagerCandidate: async (userId, payload) => {
+    const { data } = await api.put(`/profile/manager-candidates/${userId}`, payload);
+    return data;
+  }
+};
+
+export const workflowApi = {
+  listSteps: async () => {
+    const { data } = await api.get('/workflow/steps');
+    return data.steps;
+  },
+  updateSteps: async (steps) => {
+    const { data } = await api.put('/workflow/steps', { steps });
+    return data.steps;
   }
 };
 

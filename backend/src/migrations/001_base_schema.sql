@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS users (
   email VARCHAR(255) NULL,
   full_name VARCHAR(255) NOT NULL,
   role ENUM('CONTRACTOR', 'PM', 'FINANCE', 'ADMIN') NOT NULL,
-  provider ENUM('GOOGLE', 'JIRA') NOT NULL,
+  is_project_manager TINYINT(1) NOT NULL DEFAULT 0,
+  provider ENUM('GOOGLE', 'JIRA') NULL,
   provider_id VARCHAR(255) NULL,
   avatar_url VARCHAR(512) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -135,6 +136,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   invoice_number VARCHAR(100) UNIQUE NOT NULL,
   contractor_id BIGINT NOT NULL,
+  pm_approver_user_id BIGINT NULL,
   project_name VARCHAR(255) NOT NULL,
   start_date DATE NOT NULL,
   end_date DATE NOT NULL,
@@ -144,7 +146,9 @@ CREATE TABLE IF NOT EXISTS invoices (
   status ENUM('DRAFT', 'PENDING_PM', 'REJECTED_PM', 'APPROVED_PM', 'PAID') NOT NULL,
   pdf_path VARCHAR(255) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_invoices_contractor FOREIGN KEY (contractor_id) REFERENCES users(id)
+  KEY idx_invoices_pm_approver_user_id (pm_approver_user_id),
+  CONSTRAINT fk_invoices_contractor FOREIGN KEY (contractor_id) REFERENCES users(id),
+  CONSTRAINT fk_invoices_pm_approver_user FOREIGN KEY (pm_approver_user_id) REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS invoice_comments (
@@ -184,6 +188,7 @@ CREATE TABLE IF NOT EXISTS approval_steps (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   approval_id BIGINT NOT NULL,
   step_order INT NOT NULL,
+  step_title VARCHAR(255) NULL,
   approver_user_id BIGINT NULL,
   status ENUM('PENDING', 'APPROVED', 'REJECTED') NOT NULL DEFAULT 'PENDING',
   comment TEXT NULL,
@@ -193,6 +198,27 @@ CREATE TABLE IF NOT EXISTS approval_steps (
   CONSTRAINT fk_approval_steps_approval FOREIGN KEY (approval_id) REFERENCES approvals(id),
   CONSTRAINT fk_approval_steps_approver FOREIGN KEY (approver_user_id) REFERENCES users(id)
 );
+
+CREATE TABLE IF NOT EXISTS approval_workflow_steps (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  step_order INT NOT NULL,
+  step_title VARCHAR(255) NOT NULL,
+  approver_user_id BIGINT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 0,
+  is_final TINYINT(1) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_approval_workflow_step_order (step_order),
+  CONSTRAINT fk_approval_workflow_step_approver FOREIGN KEY (approver_user_id) REFERENCES users(id)
+);
+
+INSERT IGNORE INTO approval_workflow_steps (step_order, step_title, approver_user_id, is_active, is_final) VALUES
+  (1, 'Level 1 Approval', NULL, 1, 0),
+  (2, 'Level 2 Approval', NULL, 0, 0),
+  (3, 'Level 3 Approval', NULL, 0, 0),
+  (4, 'Level 4 Approval', NULL, 0, 0),
+  (5, 'Level 5 Approval', NULL, 0, 0),
+  (6, 'Level 6 Approval', NULL, 0, 1);
 
 CREATE TABLE IF NOT EXISTS comments (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,

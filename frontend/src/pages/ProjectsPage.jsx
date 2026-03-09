@@ -154,7 +154,7 @@ export default function ProjectsPage({ user }) {
             <button
               type="button"
               onClick={syncProjects}
-              disabled={syncingProjects}
+              disabled={syncingProjects || !user?.jiraConnected}
               className="rounded-md bg-[#14A44D] px-3 py-2 text-xs font-semibold text-white hover:bg-[#118a41] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {syncingProjects ? 'Syncing Projects...' : 'Sync Projects'}
@@ -162,7 +162,7 @@ export default function ProjectsPage({ user }) {
             <button
               type="button"
               onClick={syncAllProjectIssues}
-              disabled={syncingAllIssues}
+              disabled={syncingAllIssues || !user?.jiraConnected}
               className="rounded-md bg-[#F59E0B] px-3 py-2 text-xs font-semibold text-white hover:bg-[#d88908] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {syncingAllIssues ? 'Syncing All Issues...' : 'Sync All Issues'}
@@ -177,6 +177,9 @@ export default function ProjectsPage({ user }) {
         <p className="text-sm text-amber-200">
           Read-only mode. Only the configured super admin can run project and issue sync actions.
         </p>
+      ) : null}
+      {user?.isSuperAdmin && !user?.jiraConnected ? (
+        <p className="text-sm text-amber-200">Connect Jira to run project and issue sync actions.</p>
       ) : null}
       <p className="text-sm text-slate-300">{message}</p>
       {allIssuesStatus && (
@@ -249,7 +252,7 @@ export default function ProjectsPage({ user }) {
                     <button
                       type="button"
                       onClick={() => syncProjectIssues(project)}
-                      disabled={syncingProjectId === project.id}
+                      disabled={syncingProjectId === project.id || !user?.jiraConnected}
                       className="rounded-md bg-[#3C50E0] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {syncingProjectId === project.id ? 'Syncing...' : 'Sync Issues'}

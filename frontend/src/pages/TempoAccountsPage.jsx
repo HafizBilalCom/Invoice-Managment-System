@@ -85,7 +85,7 @@ export default function TempoAccountsPage({ user }) {
           <button
             type="button"
             onClick={triggerSync}
-            disabled={isSyncing}
+            disabled={isSyncing || !user?.jiraConnected}
             className="rounded-lg bg-[#3C50E0] px-4 py-2 text-sm font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSyncing ? 'Syncing...' : 'Run Tempo Accounts Sync'}
@@ -97,6 +97,9 @@ export default function TempoAccountsPage({ user }) {
         <p className="text-sm text-amber-200">
           Read-only mode. Only the configured super admin can run the Tempo accounts sync.
         </p>
+      ) : null}
+      {user?.isSuperAdmin && !user?.jiraConnected ? (
+        <p className="text-sm text-amber-200">Connect Jira to run Tempo accounts sync.</p>
       ) : null}
       <p className="text-sm text-slate-300">{message}</p>
 

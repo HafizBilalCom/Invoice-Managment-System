@@ -40,6 +40,7 @@ export default function JiraUsersPage({ user }) {
     loadUsers();
   }, []);
 
+
   const filteredUsers = useMemo(() => {
     const term = search.trim().toLowerCase();
     return users.filter((item) => {
@@ -90,7 +91,7 @@ export default function JiraUsersPage({ user }) {
           <button
             type="button"
             onClick={syncUsers}
-            disabled={isSyncing}
+            disabled={isSyncing || !user?.jiraConnected}
             className="rounded-lg bg-[#3C50E0] px-4 py-2 text-sm font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSyncing ? 'Syncing...' : 'Run Jira Users Sync'}
@@ -102,6 +103,9 @@ export default function JiraUsersPage({ user }) {
         <p className="text-sm text-amber-200">
           Read-only mode. Only the configured super admin can run Jira users sync.
         </p>
+      ) : null}
+      {user?.isSuperAdmin && !user?.jiraConnected ? (
+        <p className="text-sm text-amber-200">Connect Jira to run Jira users sync.</p>
       ) : null}
       <p className="text-sm text-slate-300">{message}</p>
 

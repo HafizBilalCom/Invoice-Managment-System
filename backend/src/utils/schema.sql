@@ -3,7 +3,8 @@ CREATE TABLE users (
   email VARCHAR(255) UNIQUE NOT NULL,
   full_name VARCHAR(255) NOT NULL,
   role ENUM('CONTRACTOR', 'PM', 'FINANCE', 'ADMIN') NOT NULL,
-  provider ENUM('GOOGLE', 'JIRA') NOT NULL,
+  is_project_manager TINYINT(1) NOT NULL DEFAULT 0,
+  provider ENUM('GOOGLE', 'JIRA'),
   provider_id VARCHAR(255),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -12,6 +13,7 @@ CREATE TABLE invoices (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   invoice_number VARCHAR(100) UNIQUE NOT NULL,
   contractor_id BIGINT NOT NULL,
+  pm_approver_user_id BIGINT,
   project_name VARCHAR(255) NOT NULL,
   start_date DATE NOT NULL,
   end_date DATE NOT NULL,
@@ -44,7 +46,8 @@ CREATE TABLE invoices (
   bank_postal_code_snapshot VARCHAR(50),
   bank_country_snapshot VARCHAR(100),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (contractor_id) REFERENCES users(id)
+  FOREIGN KEY (contractor_id) REFERENCES users(id),
+  FOREIGN KEY (pm_approver_user_id) REFERENCES users(id)
 );
 
 CREATE TABLE invoice_comments (

@@ -17,6 +17,7 @@ function formatDate(value) {
 
 export default function InvoicesPage() {
   const [invoices, setInvoices] = useState([]);
+  const [approvers, setApprovers] = useState([]);
   const [message, setMessage] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [projectFilter, setProjectFilter] = useState('all');
@@ -24,6 +25,8 @@ export default function InvoicesPage() {
   const [dateTo, setDateTo] = useState('');
   const [regeneratingId, setRegeneratingId] = useState(null);
   const [submittingId, setSubmittingId] = useState(null);
+  const [submitTargetInvoiceId, setSubmitTargetInvoiceId] = useState(null);
+  const [selectedApproverId, setSelectedApproverId] = useState('');
 
   const loadInvoices = async () => {
     try {
@@ -38,6 +41,10 @@ export default function InvoicesPage() {
 
   useEffect(() => {
     loadInvoices();
+    invoiceApi
+      .listApprovers()
+      .then((rows) => setApprovers(rows))
+      .catch(() => setApprovers([]));
   }, []);
 
   const projectOptions = useMemo(() => {
@@ -79,13 +86,15 @@ export default function InvoicesPage() {
     }
   };
 
-  const submitInvoice = async (invoiceId) => {
+  const submitInvoice = async (invoiceId, pmApproverUserId) => {
     setSubmittingId(invoiceId);
     setMessage('Submitting invoice for approval...');
     try {
-      await invoiceApi.submit(invoiceId);
+      await invoiceApi.submit(invoiceId, { pmApproverUserId });
       await loadInvoices();
       setMessage('Invoice submitted for approval.');
+      setSubmitTargetInvoiceId(null);
+      setSelectedApproverId('');
     } catch (error) {
       setMessage(error?.response?.data?.message || 'Failed to submit invoice for approval');
     } finally {
@@ -110,9 +119,9 @@ export default function InvoicesPage() {
         >
           <option value="all">All Statuses</option>
           <option value="DRAFT">Draft</option>
-          <option value="PENDING_PM">Pending PM Approval</option>
-          <option value="APPROVED_PM">Approved by PM</option>
-          <option value="REJECTED_PM">Rejected by PM</option>
+          <option value="PENDING_PM">Pending Approval</option>
+          <option value="APPROVED_PM">Approved</option>
+          <option value="REJECTED_PM">Rejected</option>
           <option value="PAID">Paid</option>
         </select>
 
@@ -160,6 +169,7 @@ export default function InvoicesPage() {
                 <th className="px-4 py-3">Hours</th>
                 <th className="px-4 py-3">Amount</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Assigned PM</th>
                 <th className="px-4 py-3">Actions</th>
               </tr>
             </thead>
@@ -182,6 +192,7 @@ export default function InvoicesPage() {
                     <td className="px-4 py-3">{invoice.totalHours}</td>
                     <td className="px-4 py-3">${invoice.amount}</td>
                     <td className="px-4 py-3">{invoice.status}</td>
+                    <td className="px-4 py-3">{invoice.pmApproverName || '-'}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
                         <a
@@ -194,6 +205,7 @@ export default function InvoicesPage() {
                         </a>
                         <Link
                           to={`/invoices/${invoice.id}`}
+                          state={{ from: '/invoices', backLabel: 'Back to My Invoices' }}
                           className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20"
                         >
                           View
@@ -216,7 +228,10 @@ export default function InvoicesPage() {
                         {invoice.statusCode === 'DRAFT' ? (
                           <button
                             type="button"
-                            onClick={() => submitInvoice(invoice.id)}
+                            onClick={() => {
+                              setSubmitTargetInvoiceId(invoice.id);
+                              setSelectedApproverId('');
+                            }}
                             disabled={submittingId === invoice.id}
                             className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
                           >
@@ -232,6 +247,47 @@ export default function InvoicesPage() {
           </table>
         </div>
       </div>
+
+      {submitTargetInvoiceId ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-xl border border-[#2D3748] bg-[#111928] p-5">
+            <h3 className="text-lg font-semibold text-white">Submit Invoice</h3>
+            <p className="mt-1 text-sm text-slate-400">Select a project manager to receive this invoice.</p>
+            <select
+              value={selectedApproverId}
+              onChange={(event) => setSelectedApproverId(event.target.value)}
+              className="mt-4 w-full rounded-lg border border-[#2D3748] bg-[#1A2233] px-3 py-2 text-sm text-white"
+            >
+              <option value="">Select Project Manager</option>
+              {approvers.map((approver) => (
+                <option key={approver.id} value={approver.id}>
+                  {approver.name} ({approver.email})
+                </option>
+              ))}
+            </select>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSubmitTargetInvoiceId(null);
+                  setSelectedApproverId('');
+                }}
+                className="rounded-lg border border-[#2D3748] bg-[#1A2233] px-3 py-2 text-sm text-white hover:bg-[#243041]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => submitInvoice(submitTargetInvoiceId, Number(selectedApproverId))}
+                disabled={!selectedApproverId || submittingId === submitTargetInvoiceId}
+                className="rounded-lg bg-[#3C50E0] px-3 py-2 text-sm font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {submittingId === submitTargetInvoiceId ? 'Submitting...' : 'Submit'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

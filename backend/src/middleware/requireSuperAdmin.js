@@ -1,11 +1,15 @@
 const { isSuperAdminEmail } = require('../utils/superAdmin');
 
 function requireSuperAdmin(req, res, next) {
-  console.log(JSON.stringify(req.jiraConnection));
-  if (!req.jiraConnection?.external_email || !isSuperAdminEmail(req.jiraConnection.external_email)) {
-    
+  let userEmail = req.user?.email;
+  if(!userEmail) {
+    if(req.jiraConnection?.external_email) {
+      userEmail = req.jiraConnection.external_email;
+    }
+  }
+  if (!userEmail || !isSuperAdminEmail(userEmail)) {
     return res.status(403).json({
-      message: 'Only the configured super admin can run this sync action '+req.jiraConnection?.external_email
+      message: 'Only the configured super admin can run this sync action ' + userEmail
     });
   }
 

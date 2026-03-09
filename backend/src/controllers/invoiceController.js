@@ -1,6 +1,7 @@
 const db = require('../config/db');
 const { generateInvoicePdf } = require('../services/pdfService');
 const { buildInvoiceSnapshot, getUserProfileRow } = require('../services/profileService');
+const { listProjectManagers } = require('../services/userService');
 const logger = require('../utils/logger');
 
 const STATUS_DB_TO_LABEL = {
@@ -25,11 +26,24 @@ const STATUS_INPUT_TO_DB = {
 };
 
 function mapInvoiceRow(row) {
+  let resolvedStatus = STATUS_DB_TO_LABEL[row.status] || row.status;
+  if (row.status === 'PENDING_PM' && row.current_step_title) {
+    const assignee = row.current_step_approver_name || row.current_step_approver_email || 'Unassigned';
+    resolvedStatus = `Pending: ${row.current_step_title} (${assignee})`;
+  }
+
   return {
     id: row.id,
     invoiceNumber: row.invoice_number,
     contractorId: row.contractor_id,
     contractorName: row.contractor_name,
+    pmApproverUserId: row.pm_approver_user_id || null,
+    pmApproverName: row.pm_approver_name || null,
+    pmApproverEmail: row.pm_approver_email || null,
+    currentStepTitle: row.current_step_title || null,
+    currentStepApproverUserId: row.current_step_approver_user_id || null,
+    currentStepApproverName: row.current_step_approver_name || null,
+    currentStepApproverEmail: row.current_step_approver_email || null,
     projectKey: row.project_key_snapshot || null,
     projectName: row.project_name,
     projectNumber: row.project_number_snapshot || null,
@@ -39,7 +53,7 @@ function mapInvoiceRow(row) {
     totalHours: Number(row.total_hours),
     rate: Number(row.rate),
     amount: Number(row.amount),
-    status: STATUS_DB_TO_LABEL[row.status] || row.status,
+    status: resolvedStatus,
     statusCode: row.status,
     pdfPath: row.pdf_path,
     payeeName: row.payee_name_snapshot || null,
@@ -53,6 +67,29 @@ function mapInvoiceRow(row) {
     createdAt: row.created_at,
     comments: []
   };
+}
+
+async function getActiveWorkflowSteps(connection) {
+  const [rows] = await connection.query(
+    `SELECT step_order, step_title, approver_user_id, is_final
+     FROM approval_workflow_steps
+     WHERE is_active = 1
+     ORDER BY step_order ASC`
+  );
+  return rows;
+}
+
+async function hasApprovalAssignment(connection, invoiceId, userId) {
+  const [rows] = await connection.query(
+    `SELECT 1
+     FROM approvals a
+     JOIN approval_steps aps ON aps.approval_id = a.id
+     WHERE a.invoice_id = ?
+       AND aps.approver_user_id = ?
+     LIMIT 1`,
+    [invoiceId, userId]
+  );
+  return Boolean(rows[0]);
 }
 
 async function getProjectForInvoice(connection, { projectId, projectKey }) {
@@ -220,6 +257,10 @@ function groupInvoiceWorklogs(items) {
 async function getInvoiceById(invoiceId) {
   const [invoiceRows] = await db.query(
     `SELECT i.id, i.invoice_number, i.contractor_id, u.full_name AS contractor_name,
+            i.pm_approver_user_id, pm.full_name AS pm_approver_name, pm.email AS pm_approver_email,
+            cur_aps.step_title AS current_step_title, cur_aps.approver_user_id AS current_step_approver_user_id,
+            cur_u.full_name AS current_step_approver_name,
+            cur_u.email AS current_step_approver_email,
             i.project_name, i.project_key_snapshot, i.project_number_snapshot,
             i.project_account_number_snapshot, i.start_date, i.end_date, i.total_hours, i.rate,
             i.amount, i.status, i.pdf_path, i.created_at, i.payee_name_snapshot,
@@ -228,6 +269,10 @@ async function getInvoiceById(invoiceId) {
             i.bank_account_last4_snapshot, i.bank_name_snapshot
      FROM invoices i
      JOIN users u ON u.id = i.contractor_id
+     LEFT JOIN users pm ON pm.id = i.pm_approver_user_id
+     LEFT JOIN approvals a ON a.invoice_id = i.id
+     LEFT JOIN approval_steps cur_aps ON cur_aps.approval_id = a.id AND cur_aps.step_order = a.current_level
+     LEFT JOIN users cur_u ON cur_u.id = cur_aps.approver_user_id
      WHERE i.id = ?`,
     [invoiceId]
   );
@@ -262,7 +307,13 @@ async function getInvoiceDetailById(connection, invoiceId) {
   const [invoiceRows] = await connection.query(
     `SELECT i.id, i.invoice_number, i.contractor_id, u.full_name AS contractor_name,
             u.email AS contractor_email, i.project_name, i.project_key_snapshot, i.project_number_snapshot,
-            i.project_account_number_snapshot, i.start_date, i.end_date, i.total_hours, i.rate,
+            i.project_account_number_snapshot, i.pm_approver_user_id,
+            pm.full_name AS pm_approver_name, pm.email AS pm_approver_email,
+            a.current_level,
+            cur_aps.step_title AS current_step_title, cur_aps.approver_user_id AS current_step_approver_user_id,
+            cur_u.full_name AS current_step_approver_name,
+            cur_u.email AS current_step_approver_email,
+            i.start_date, i.end_date, i.total_hours, i.rate,
             i.amount, i.status, i.pdf_path, i.created_at, i.payee_name_snapshot, i.payee_email_snapshot,
             i.payee_address_line1_snapshot, i.payee_address_line2_snapshot, i.payee_city_snapshot,
             i.payee_state_snapshot, i.payee_postal_code_snapshot, i.payee_country_snapshot,
@@ -273,6 +324,10 @@ async function getInvoiceDetailById(connection, invoiceId) {
             i.bank_state_snapshot, i.bank_postal_code_snapshot, i.bank_country_snapshot
      FROM invoices i
      JOIN users u ON u.id = i.contractor_id
+     LEFT JOIN users pm ON pm.id = i.pm_approver_user_id
+     LEFT JOIN approvals a ON a.invoice_id = i.id
+     LEFT JOIN approval_steps cur_aps ON cur_aps.approval_id = a.id AND cur_aps.step_order = a.current_level
+     LEFT JOIN users cur_u ON cur_u.id = cur_aps.approver_user_id
      WHERE i.id = ?
      LIMIT 1`,
     [invoiceId]
@@ -283,6 +338,12 @@ async function getInvoiceDetailById(connection, invoiceId) {
   }
 
   const invoiceRow = invoiceRows[0];
+  let resolvedStatus = STATUS_DB_TO_LABEL[invoiceRow.status] || invoiceRow.status;
+  if (invoiceRow.status === 'PENDING_PM' && invoiceRow.current_step_title) {
+    const assignee =
+      invoiceRow.current_step_approver_name || invoiceRow.current_step_approver_email || 'Unassigned';
+    resolvedStatus = `Pending: ${invoiceRow.current_step_title} (${assignee})`;
+  }
   const [itemRows] = await connection.query(
     `SELECT ii.id, ii.description, ii.quantity, ii.unit_rate, ii.amount,
             COALESCE(ji.issue_key, te.issue_key, '') AS issue_key,
@@ -305,12 +366,30 @@ async function getInvoiceDetailById(connection, invoiceId) {
     [invoiceId]
   );
 
+  const [approvalStepRows] = await connection.query(
+    `SELECT aps.id, aps.step_order, aps.step_title, aps.approver_user_id, aps.status, aps.comment, aps.acted_at,
+            aps.created_at, u.full_name AS approver_name, u.email AS approver_email
+     FROM approval_steps aps
+     LEFT JOIN users u ON u.id = aps.approver_user_id
+     JOIN approvals a ON a.id = aps.approval_id
+     WHERE a.invoice_id = ?
+     ORDER BY aps.step_order ASC`,
+    [invoiceId]
+  );
+
   return {
     id: invoiceRow.id,
     invoiceNumber: invoiceRow.invoice_number,
     contractorId: invoiceRow.contractor_id,
     contractorName: invoiceRow.contractor_name,
     contractorEmail: invoiceRow.contractor_email,
+    pmApproverUserId: invoiceRow.pm_approver_user_id || null,
+    pmApproverName: invoiceRow.pm_approver_name || null,
+    pmApproverEmail: invoiceRow.pm_approver_email || null,
+    currentStepTitle: invoiceRow.current_step_title || null,
+    currentStepApproverUserId: invoiceRow.current_step_approver_user_id || null,
+    currentStepApproverName: invoiceRow.current_step_approver_name || null,
+    currentStepApproverEmail: invoiceRow.current_step_approver_email || null,
     projectKey: invoiceRow.project_key_snapshot || null,
     projectName: invoiceRow.project_name,
     projectNumber: invoiceRow.project_number_snapshot || null,
@@ -320,10 +399,25 @@ async function getInvoiceDetailById(connection, invoiceId) {
     totalHours: Number(invoiceRow.total_hours),
     rate: Number(invoiceRow.rate),
     amount: Number(invoiceRow.amount),
-    status: STATUS_DB_TO_LABEL[invoiceRow.status] || invoiceRow.status,
+    status: resolvedStatus,
     statusCode: invoiceRow.status,
     pdfPath: invoiceRow.pdf_path,
     createdAt: invoiceRow.created_at,
+    approvalTimeline: approvalStepRows.map((row) => ({
+      id: row.id,
+      stepOrder: Number(row.step_order),
+      stepTitle: row.step_title || `Level ${row.step_order}`,
+      approverUserId: row.approver_user_id || null,
+      approverName: row.approver_name || null,
+      approverEmail: row.approver_email || null,
+      status: row.status,
+      comment: row.comment || null,
+      actedAt: row.acted_at || null,
+      createdAt: row.created_at || null,
+      isCurrent:
+        invoiceRow.status === 'PENDING_PM' &&
+        Number(invoiceRow.current_level || 0) === Number(row.step_order)
+    })),
     items: groupInvoiceWorklogs(
       itemRows.map((item) => ({
         issueKey: item.issue_key,
@@ -679,15 +773,101 @@ const listInvoices = async (req, res) => {
   try {
     const conditions = [];
     const params = [];
+    const approvalsMine = req.query.approvalsMine === 'true';
+    const requestedStatus = req.query.status ? String(req.query.status) : null;
 
     if (req.query.mine === 'true') {
       conditions.push('i.contractor_id = ?');
       params.push(req.user.id);
     }
 
+    if (approvalsMine) {
+      if (!requestedStatus || requestedStatus === 'PENDING_PM') {
+        conditions.push(
+          `EXISTS (
+            SELECT 1
+            FROM approvals a
+            JOIN approval_steps aps ON aps.approval_id = a.id AND aps.step_order = a.current_level
+            WHERE a.invoice_id = i.id
+              AND aps.approver_user_id = ?
+              AND aps.status = 'PENDING'
+          )`
+        );
+        params.push(req.user.id);
+      } else {
+        conditions.push(
+          `EXISTS (
+            SELECT 1
+            FROM approvals a
+            JOIN approval_steps aps ON aps.approval_id = a.id
+            WHERE a.invoice_id = i.id
+              AND aps.approver_user_id = ?
+              AND aps.status IN ('APPROVED', 'REJECTED')
+          )`
+        );
+        params.push(req.user.id);
+      }
+    }
+
+    if (req.query.status) {
+      const requestedInvoiceStatus = String(req.query.status);
+      if (!approvalsMine || requestedInvoiceStatus === 'PENDING_PM' || requestedInvoiceStatus === 'PAID') {
+        conditions.push('i.status = ?');
+        params.push(requestedInvoiceStatus);
+      } else if (requestedInvoiceStatus === 'REJECTED_PM') {
+        conditions.push(
+          `EXISTS (
+            SELECT 1
+            FROM approvals a
+            JOIN approval_steps aps ON aps.approval_id = a.id
+            WHERE a.invoice_id = i.id
+              AND aps.approver_user_id = ?
+              AND aps.status = 'REJECTED'
+          )`
+        );
+        params.push(req.user.id);
+      } else if (requestedInvoiceStatus === 'APPROVED_PM') {
+        conditions.push(
+          `EXISTS (
+            SELECT 1
+            FROM approvals a
+            JOIN approval_steps aps ON aps.approval_id = a.id
+            WHERE a.invoice_id = i.id
+              AND aps.approver_user_id = ?
+              AND aps.status = 'APPROVED'
+          )`
+        );
+        params.push(req.user.id);
+      }
+    }
+
+    if (req.query.projectKey) {
+      conditions.push('i.project_key_snapshot = ?');
+      params.push(String(req.query.projectKey));
+    }
+
+    if (req.query.contractorId) {
+      conditions.push('i.contractor_id = ?');
+      params.push(Number(req.query.contractorId));
+    }
+
+    if (req.query.dateFrom) {
+      conditions.push('i.start_date >= ?');
+      params.push(String(req.query.dateFrom));
+    }
+
+    if (req.query.dateTo) {
+      conditions.push('i.end_date <= ?');
+      params.push(String(req.query.dateTo));
+    }
+
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const [rows] = await db.query(
         `SELECT i.id, i.invoice_number, i.contractor_id, u.full_name AS contractor_name,
+              i.pm_approver_user_id, pm.full_name AS pm_approver_name, pm.email AS pm_approver_email,
+              cur_aps.step_title AS current_step_title, cur_aps.approver_user_id AS current_step_approver_user_id,
+              cur_u.full_name AS current_step_approver_name,
+              cur_u.email AS current_step_approver_email,
               i.project_name, i.project_key_snapshot, i.project_number_snapshot,
               i.project_account_number_snapshot, i.start_date, i.end_date, i.total_hours,
               i.rate, i.amount, i.status, i.pdf_path, i.created_at, i.payee_name_snapshot,
@@ -696,6 +876,10 @@ const listInvoices = async (req, res) => {
               i.bank_account_last4_snapshot, i.bank_name_snapshot
        FROM invoices i
        JOIN users u ON u.id = i.contractor_id
+       LEFT JOIN users pm ON pm.id = i.pm_approver_user_id
+       LEFT JOIN approvals a ON a.invoice_id = i.id
+       LEFT JOIN approval_steps cur_aps ON cur_aps.approval_id = a.id AND cur_aps.step_order = a.current_level
+       LEFT JOIN users cur_u ON cur_u.id = cur_aps.approver_user_id
        ${whereClause}
        ORDER BY i.created_at DESC`,
       params
@@ -749,7 +933,7 @@ const getInvoiceDetail = async (req, res) => {
     }
 
     const [invoiceRows] = await connection.query(
-      'SELECT id, contractor_id FROM invoices WHERE id = ? LIMIT 1',
+      'SELECT id, contractor_id, pm_approver_user_id FROM invoices WHERE id = ? LIMIT 1',
       [invoiceId]
     );
 
@@ -758,7 +942,13 @@ const getInvoiceDetail = async (req, res) => {
     }
 
     const invoice = invoiceRows[0];
-    const canAccess = Number(invoice.contractor_id) === Number(req.user.id) || ['PM', 'FINANCE', 'ADMIN'].includes(req.user.role);
+    const isAssignedApprover = await hasApprovalAssignment(connection, invoiceId, req.user.id);
+    const canAccess =
+      Number(invoice.contractor_id) === Number(req.user.id) ||
+      Number(invoice.pm_approver_user_id || 0) === Number(req.user.id) ||
+      isAssignedApprover ||
+      ['PM', 'FINANCE', 'ADMIN'].includes(req.user.role) ||
+      req.user.isSuperAdmin;
     if (!canAccess) {
       return res.status(403).json({ message: 'You do not have access to this invoice' });
     }
@@ -772,14 +962,27 @@ const getInvoiceDetail = async (req, res) => {
   }
 };
 
+const listApprovers = async (req, res) => {
+  try {
+    const approvers = await listProjectManagers();
+    return res.json({ approvers });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to fetch project managers', error: error.message });
+  }
+};
+
 const submitInvoiceForApproval = async (req, res) => {
   const connection = await db.getConnection();
   let transactionStarted = false;
 
   try {
     const invoiceId = Number(req.params.id);
+    const pmApproverUserId = Number(req.body?.pmApproverUserId);
     if (!Number.isInteger(invoiceId) || invoiceId <= 0) {
       return res.status(400).json({ message: 'Invalid invoice id' });
+    }
+    if (!Number.isInteger(pmApproverUserId) || pmApproverUserId <= 0) {
+      return res.status(400).json({ message: 'pmApproverUserId is required' });
     }
 
     const [invoiceRows] = await connection.query(
@@ -800,10 +1003,45 @@ const submitInvoiceForApproval = async (req, res) => {
       return res.status(400).json({ message: 'Only draft invoices can be submitted for approval' });
     }
 
+    const [approverRows] = await connection.query(
+      'SELECT id FROM users WHERE id = ? AND is_project_manager = 1 LIMIT 1',
+      [pmApproverUserId]
+    );
+    if (!approverRows[0]) {
+      return res.status(400).json({ message: 'Selected project manager is invalid' });
+    }
+
+    const workflowSteps = await getActiveWorkflowSteps(connection);
+    if (workflowSteps.length === 0) {
+      return res.status(400).json({ message: 'Approval workflow is not configured' });
+    }
+
+    const firstStepConfig = workflowSteps.find((step) => Number(step.step_order) === 1);
+    if (!firstStepConfig) {
+      return res.status(400).json({ message: 'Approval workflow must include active step 1' });
+    }
+
+    const finalSteps = workflowSteps.filter((step) => Number(step.is_final) === 1);
+    if (finalSteps.length !== 1) {
+      return res.status(400).json({ message: 'Approval workflow must have exactly one final step' });
+    }
+
+    for (const step of workflowSteps) {
+      const stepOrder = Number(step.step_order);
+      const approverId = stepOrder === 1 ? pmApproverUserId : Number(step.approver_user_id || 0);
+      if (!Number.isInteger(approverId) || approverId <= 0) {
+        return res.status(400).json({ message: `Workflow step ${stepOrder} has no approver configured` });
+      }
+    }
+
     await connection.beginTransaction();
     transactionStarted = true;
 
-    await connection.query('UPDATE invoices SET status = ? WHERE id = ?', ['PENDING_PM', invoiceId]);
+    await connection.query('UPDATE invoices SET status = ?, pm_approver_user_id = ? WHERE id = ?', [
+      'PENDING_PM',
+      pmApproverUserId,
+      invoiceId
+    ]);
     await connection.query(
       `INSERT INTO approvals (invoice_id, current_level, status)
        VALUES (?, 1, 'PENDING')
@@ -811,9 +1049,41 @@ const submitInvoiceForApproval = async (req, res) => {
       [invoiceId]
     );
 
+    const [approvalRows] = await connection.query('SELECT id FROM approvals WHERE invoice_id = ? LIMIT 1', [invoiceId]);
+    const approvalId = approvalRows[0]?.id;
+    if (!approvalId) {
+      throw new Error('Approval record was not created');
+    }
+
+    await connection.query('DELETE FROM approval_steps WHERE approval_id = ?', [approvalId]);
+
+    for (const step of workflowSteps) {
+      const stepOrder = Number(step.step_order);
+      const approverId = stepOrder === 1 ? pmApproverUserId : Number(step.approver_user_id || 0);
+      await connection.query(
+        `INSERT INTO approval_steps (approval_id, step_order, step_title, approver_user_id, status, comment, acted_at)
+         VALUES (?, ?, ?, ?, 'PENDING', NULL, NULL)`,
+        [approvalId, stepOrder, step.step_title, approverId]
+      );
+    }
+
     await connection.query(
       'INSERT INTO audit_logs (user_id, action, metadata) VALUES (?, ?, ?)',
-      [req.user.id, 'INVOICE_SUBMITTED_FOR_APPROVAL', JSON.stringify({ invoiceId })]
+      [
+        req.user.id,
+        'INVOICE_SUBMITTED_FOR_APPROVAL',
+        JSON.stringify({
+          invoiceId,
+          firstApproverUserId: pmApproverUserId,
+          workflowSteps: workflowSteps.map((step) => ({
+            stepOrder: Number(step.step_order),
+            stepTitle: step.step_title,
+            approverUserId:
+              Number(step.step_order) === 1 ? pmApproverUserId : Number(step.approver_user_id || 0),
+            isFinal: Boolean(step.is_final)
+          }))
+        })
+      ]
     );
 
     await connection.commit();
@@ -842,7 +1112,7 @@ const regenerateInvoicePdf = async (req, res) => {
     }
 
     const [invoiceRows] = await connection.query(
-      'SELECT id, contractor_id FROM invoices WHERE id = ? LIMIT 1',
+      'SELECT id, contractor_id, pm_approver_user_id FROM invoices WHERE id = ? LIMIT 1',
       [invoiceId]
     );
 
@@ -851,7 +1121,13 @@ const regenerateInvoicePdf = async (req, res) => {
     }
 
     const invoice = invoiceRows[0];
-    const canAccess = invoice.contractor_id === req.user.id || ['PM', 'FINANCE', 'ADMIN'].includes(req.user.role);
+    const isAssignedApprover = await hasApprovalAssignment(connection, invoiceId, req.user.id);
+    const canAccess =
+      Number(invoice.contractor_id) === Number(req.user.id) ||
+      Number(invoice.pm_approver_user_id || 0) === Number(req.user.id) ||
+      isAssignedApprover ||
+      ['PM', 'FINANCE', 'ADMIN'].includes(req.user.role) ||
+      req.user.isSuperAdmin;
     if (!canAccess) {
       return res.status(403).json({ message: 'You do not have access to regenerate this invoice PDF' });
     }
@@ -874,6 +1150,62 @@ const regenerateInvoicePdf = async (req, res) => {
   }
 };
 
+const addInvoiceComment = async (req, res) => {
+  const connection = await db.getConnection();
+
+  try {
+    const invoiceId = Number(req.params.id);
+    const commentText = String(req.body?.comment || '').trim();
+
+    if (!Number.isInteger(invoiceId) || invoiceId <= 0) {
+      return res.status(400).json({ message: 'Invalid invoice id' });
+    }
+    if (!commentText) {
+      return res.status(400).json({ message: 'Comment is required' });
+    }
+
+    const [invoiceRows] = await connection.query(
+      'SELECT id, contractor_id, pm_approver_user_id FROM invoices WHERE id = ? LIMIT 1',
+      [invoiceId]
+    );
+
+    if (!invoiceRows[0]) {
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
+
+    const invoice = invoiceRows[0];
+    const isAssignedApprover = await hasApprovalAssignment(connection, invoiceId, req.user.id);
+    const canComment =
+      Number(invoice.contractor_id) === Number(req.user.id) ||
+      Number(invoice.pm_approver_user_id || 0) === Number(req.user.id) ||
+      isAssignedApprover ||
+      ['PM', 'FINANCE', 'ADMIN'].includes(req.user.role) ||
+      req.user.isSuperAdmin;
+
+    if (!canComment) {
+      return res.status(403).json({ message: 'You do not have access to comment on this invoice' });
+    }
+
+    await connection.query('INSERT INTO comments (invoice_id, user_id, comment_text) VALUES (?, ?, ?)', [
+      invoiceId,
+      req.user.id,
+      commentText
+    ]);
+    await connection.query('INSERT INTO audit_logs (user_id, action, metadata) VALUES (?, ?, ?)', [
+      req.user.id,
+      'INVOICE_COMMENT_ADDED',
+      JSON.stringify({ invoiceId })
+    ]);
+
+    const updatedInvoice = await getInvoiceById(invoiceId);
+    return res.json({ invoice: updatedInvoice });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to add invoice comment', error: error.message });
+  } finally {
+    connection.release();
+  }
+};
+
 const updateInvoiceStatus = async (req, res) => {
   const connection = await db.getConnection();
   let transactionStarted = false;
@@ -891,8 +1223,17 @@ const updateInvoiceStatus = async (req, res) => {
       return res.status(400).json({ message: 'Invalid status value' });
     }
 
+    if (statusCode === 'PENDING_PM') {
+      return res.status(400).json({ message: 'Setting status to pending manually is not allowed' });
+    }
+
     const [invoiceRows] = await connection.query(
-      'SELECT id, amount FROM invoices WHERE id = ? LIMIT 1',
+      `SELECT i.id, i.amount, i.status, i.pm_approver_user_id,
+              a.id AS approval_id, a.current_level, a.status AS approval_status
+       FROM invoices i
+       LEFT JOIN approvals a ON a.invoice_id = i.id
+       WHERE i.id = ?
+       LIMIT 1`,
       [Number(id)]
     );
 
@@ -902,10 +1243,18 @@ const updateInvoiceStatus = async (req, res) => {
 
     const invoice = invoiceRows[0];
 
+    if (statusCode === 'PAID') {
+      const canMarkPaid = ['FINANCE', 'ADMIN'].includes(req.user.role) || req.user.isSuperAdmin;
+      if (!canMarkPaid) {
+        return res.status(403).json({ message: 'Only finance/admin can mark invoices as paid' });
+      }
+      if (invoice.status !== 'APPROVED_PM') {
+        return res.status(400).json({ message: 'Only fully approved invoices can be marked as paid' });
+      }
+    }
+
     await connection.beginTransaction();
     transactionStarted = true;
-
-    await connection.query('UPDATE invoices SET status = ? WHERE id = ?', [statusCode, invoice.id]);
 
     if (comment && String(comment).trim()) {
       await connection.query(
@@ -914,36 +1263,8 @@ const updateInvoiceStatus = async (req, res) => {
       );
     }
 
-    const approvalStatus =
-      statusCode === 'REJECTED_PM' ? 'REJECTED' : statusCode === 'PENDING_PM' ? 'PENDING' : 'APPROVED';
-    await connection.query(
-      `INSERT INTO approvals (invoice_id, current_level, status)
-       VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE current_level = VALUES(current_level), status = VALUES(status)`,
-      [invoice.id, statusCode === 'PAID' ? 2 : 1, approvalStatus]
-    );
-
-    const [approvalRows] = await connection.query('SELECT id FROM approvals WHERE invoice_id = ? LIMIT 1', [invoice.id]);
-    const approvalId = approvalRows[0]?.id;
-
-    if (approvalId) {
-      const stepOrder = statusCode === 'PAID' ? 2 : 1;
-      const stepStatus =
-        statusCode === 'REJECTED_PM' ? 'REJECTED' : statusCode === 'PENDING_PM' ? 'PENDING' : 'APPROVED';
-
-      await connection.query(
-        `INSERT INTO approval_steps (approval_id, step_order, approver_user_id, status, comment, acted_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           approver_user_id = VALUES(approver_user_id),
-           status = VALUES(status),
-           comment = VALUES(comment),
-           acted_at = VALUES(acted_at)`,
-        [approvalId, stepOrder, req.user.id, stepStatus, comment || null, stepStatus === 'PENDING' ? null : new Date()]
-      );
-    }
-
     if (statusCode === 'PAID') {
+      await connection.query('UPDATE invoices SET status = ? WHERE id = ?', ['PAID', invoice.id]);
       await connection.query(
         `INSERT INTO payments (invoice_id, paid_amount, paid_on, payment_reference, status)
          VALUES (?, ?, CURDATE(), ?, 'PAID')
@@ -954,12 +1275,75 @@ const updateInvoiceStatus = async (req, res) => {
            status = VALUES(status)`,
         [invoice.id, invoice.amount, `INV-${invoice.id}-${Date.now()}`]
       );
+    } else {
+      if (invoice.status !== 'PENDING_PM') {
+        return res.status(400).json({ message: 'Invoice is not pending approval' });
+      }
+      if (!invoice.approval_id) {
+        return res.status(400).json({ message: 'Approval workflow not found for this invoice' });
+      }
+
+      const [currentStepRows] = await connection.query(
+        `SELECT id, step_order, step_title, approver_user_id, status
+         FROM approval_steps
+         WHERE approval_id = ? AND step_order = ?
+         LIMIT 1`,
+        [invoice.approval_id, Number(invoice.current_level || 1)]
+      );
+      const currentStep = currentStepRows[0];
+      if (!currentStep) {
+        return res.status(400).json({ message: 'Current approval step not found' });
+      }
+      if (currentStep.status !== 'PENDING') {
+        return res.status(400).json({ message: 'Current approval step is already processed' });
+      }
+
+      const canActOnCurrentStep =
+        Number(currentStep.approver_user_id || 0) === Number(req.user.id) || req.user.isSuperAdmin;
+      if (!canActOnCurrentStep) {
+        return res.status(403).json({ message: 'You are not assigned to the current approval step' });
+      }
+
+      const stepOutcome = statusCode === 'REJECTED_PM' ? 'REJECTED' : 'APPROVED';
+      await connection.query(
+        `UPDATE approval_steps
+         SET status = ?, comment = ?, acted_at = ?
+         WHERE id = ?`,
+        [stepOutcome, comment ? String(comment).trim() : null, new Date(), currentStep.id]
+      );
+
+      if (stepOutcome === 'REJECTED') {
+        await connection.query('UPDATE approvals SET status = ? WHERE id = ?', ['REJECTED', invoice.approval_id]);
+        await connection.query('UPDATE invoices SET status = ? WHERE id = ?', ['REJECTED_PM', invoice.id]);
+      } else {
+        const [nextStepRows] = await connection.query(
+          `SELECT step_order
+           FROM approval_steps
+           WHERE approval_id = ? AND step_order > ?
+           ORDER BY step_order ASC
+           LIMIT 1`,
+          [invoice.approval_id, Number(currentStep.step_order)]
+        );
+        const nextStep = nextStepRows[0];
+
+        if (nextStep) {
+          await connection.query(
+            'UPDATE approvals SET current_level = ?, status = ? WHERE id = ?',
+            [Number(nextStep.step_order), 'PENDING', invoice.approval_id]
+          );
+          await connection.query('UPDATE invoices SET status = ? WHERE id = ?', ['PENDING_PM', invoice.id]);
+        } else {
+          await connection.query('UPDATE approvals SET status = ? WHERE id = ?', ['APPROVED', invoice.approval_id]);
+          await connection.query('UPDATE invoices SET status = ? WHERE id = ?', ['APPROVED_PM', invoice.id]);
+        }
+      }
     }
 
-    await connection.query(
-      'INSERT INTO audit_logs (user_id, action, metadata) VALUES (?, ?, ?)',
-      [req.user.id, 'INVOICE_STATUS_UPDATED', JSON.stringify({ invoiceId: invoice.id, status: statusCode })]
-    );
+    await connection.query('INSERT INTO audit_logs (user_id, action, metadata) VALUES (?, ?, ?)', [
+      req.user.id,
+      'INVOICE_STATUS_UPDATED',
+      JSON.stringify({ invoiceId: invoice.id, status: statusCode })
+    ]);
 
     await connection.commit();
     transactionStarted = false;
@@ -979,8 +1363,10 @@ const updateInvoiceStatus = async (req, res) => {
 module.exports = {
   syncAndCreateInvoice,
   listInvoices,
+  listApprovers,
   getInvoiceDetail,
   updateInvoiceStatus,
   regenerateInvoicePdf,
+  addInvoiceComment,
   submitInvoiceForApproval
 };

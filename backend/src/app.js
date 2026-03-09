@@ -3,6 +3,7 @@ const cors = require('cors');
 const session = require('express-session');
 const dotenv = require('dotenv');
 const passport = require('./config/passport');
+const applyImpersonation = require('./middleware/applyImpersonation');
 const routes = require('./routes');
 
 dotenv.config();
@@ -27,6 +28,7 @@ app.use(
 
 app.use(passport.initialize());
 app.use(passport.session());
+app.use(applyImpersonation);
 
 app.use('/api', routes);
 app.use('/pdfs', express.static('storage/pdfs'));
