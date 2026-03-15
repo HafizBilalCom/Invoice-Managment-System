@@ -13,7 +13,7 @@ const pool = mysql.createPool({
   queueLimit: 0
 });
 
-const shouldLogQueries = process.env.DB_LOG_QUERIES !== 'false';
+const shouldLogQueries = String(process.env.DEBUG_SQL_QUERY || '').trim().toLowerCase() === 'true';
 const maxSqlLength = Number(process.env.DB_LOG_SQL_MAX_LENGTH || 3000);
 const maxParamsLength = Number(process.env.DB_LOG_PARAMS_MAX_LENGTH || 3000);
 

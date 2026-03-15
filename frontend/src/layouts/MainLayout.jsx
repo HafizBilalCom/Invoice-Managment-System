@@ -9,6 +9,7 @@ export default function MainLayout({ user, onLogout, onJiraDisconnect, onStopImp
     { to: '/profile', label: 'Profile' },
     ...(user?.isSuperAdmin ? [{ to: '/project-managers', label: 'Project Managers' }] : []),
     ...(user?.isSuperAdmin ? [{ to: '/approval-workflow', label: 'Approval Workflow' }] : []),
+    ...(user?.isSuperAdmin ? [{ to: '/sync-logs', label: 'Sync Logs' }] : []),
     { to: '/timelog-sync', label: 'Step 1: Sync Timelogs' },
     { to: '/invoices', label: 'My Invoices' },
     { to: '/projects', label: 'Projects' },

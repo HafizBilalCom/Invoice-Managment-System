@@ -423,6 +423,10 @@ async function syncIssuesForProject({ userId, projectId, projectKey, jiraConnect
       projectKey,
       requestId
     });
+    const [existingIssueRows] = await connection.query(
+      'SELECT issue_key FROM jira_issues WHERE project_id = ?',
+      [projectId]
+    );
 
     logger.info('Jira issue sync: project issue fetch completed', {
       requestId,
@@ -437,11 +441,15 @@ async function syncIssuesForProject({ userId, projectId, projectKey, jiraConnect
     await connection.beginTransaction();
     transactionStarted = true;
 
+    const fetchedIssueKeys = new Set();
     let issueInserted = 0;
     let issueUpdated = 0;
     let issueUnchanged = 0;
     for (let index = 0; index < issues.length; index += 1) {
       const issue = issues[index];
+      if (issue?.key) {
+        fetchedIssueKeys.add(issue.key);
+      }
       const worklogs = issue?.fields?.worklog || [];
       const accountData = getIssueAccount({
         fields: issue?.fields || {},
@@ -475,6 +483,9 @@ async function syncIssuesForProject({ userId, projectId, projectKey, jiraConnect
       }
     }
 
+    const absentFromLatestCatalog = existingIssueRows.filter((row) => !fetchedIssueKeys.has(row.issue_key)).length;
+    const removedIssues = 0;
+
     await connection.query(
       'INSERT INTO audit_logs (user_id, action, metadata) VALUES (?, ?, ?)',
       [
@@ -487,6 +498,8 @@ async function syncIssuesForProject({ userId, projectId, projectKey, jiraConnect
           issueInserted,
           issueUpdated,
           issueUnchanged,
+          removedIssues,
+          absentFromLatestCatalog,
           pageCount,
           pageLimit
         })
@@ -503,6 +516,8 @@ async function syncIssuesForProject({ userId, projectId, projectKey, jiraConnect
       issueInserted,
       issueUpdated,
       issueUnchanged,
+      removedIssues,
+      absentFromLatestCatalog,
       pageCount,
       pageLimit
     };

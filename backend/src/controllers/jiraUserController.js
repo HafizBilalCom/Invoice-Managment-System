@@ -1,5 +1,6 @@
 const logger = require('../utils/logger');
-const { listJiraUsers, syncJiraUsers } = require('../services/jiraUserService');
+const { listJiraUsers } = require('../services/jiraUserService');
+const { runJiraUsersSyncJob } = require('../jobs/jiraUserSyncJob');
 
 const getJiraUsers = async (req, res) => {
   const requestId = `jira-users-list-${Date.now()}`;
@@ -26,10 +27,11 @@ const triggerJiraUsersSync = async (req, res) => {
   const requestId = `jira-users-sync-${Date.now()}`;
 
   try {
-    const result = await syncJiraUsers({
+    const result = await runJiraUsersSyncJob({
+      trigger: 'manual',
+      requestId,
       userId: req.user.id,
-      jiraConnection: req.jiraConnection,
-      requestId
+      jiraConnection: req.jiraConnection
     });
 
     return res.json({

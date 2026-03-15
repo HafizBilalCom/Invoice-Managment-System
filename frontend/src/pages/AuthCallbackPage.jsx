@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { authApi } from '../services/api';
 
-export default function AuthCallbackPage() {
+export default function AuthCallbackPage({ onAuthComplete }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [message, setMessage] = useState('Completing sign-in...');
@@ -12,9 +12,13 @@ export default function AuthCallbackPage() {
 
     const finishAuth = async () => {
       try {
-        await authApi.me();
+        const user = await authApi.me();
         if (cancelled) {
           return;
+        }
+
+        if (typeof onAuthComplete === 'function') {
+          onAuthComplete(user);
         }
 
         const jira = searchParams.get('jira');
@@ -48,7 +52,7 @@ export default function AuthCallbackPage() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [navigate, searchParams]);
+  }, [navigate, onAuthComplete, searchParams]);
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-[#0f172a] px-4">

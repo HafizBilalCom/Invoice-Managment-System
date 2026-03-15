@@ -167,4 +167,11 @@ export const workflowApi = {
   }
 };
 
+export const syncLogsApi = {
+  list: async (params = {}) => {
+    const { data } = await api.get('/sync-logs', { params });
+    return data;
+  }
+};
+
 export default api;

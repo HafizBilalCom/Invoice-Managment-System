@@ -7,6 +7,7 @@ const tempoAccountRoutes = require('./tempoAccountRoutes');
 const profileRoutes = require('./profileRoutes');
 const jiraUserRoutes = require('./jiraUserRoutes');
 const workflowRoutes = require('./workflowRoutes');
+const syncLogRoutes = require('./syncLogRoutes');
 
 const router = express.Router();
 
@@ -18,5 +19,6 @@ router.use('/invoices', invoiceRoutes);
 router.use('/profile', profileRoutes);
 router.use('/jira-users', jiraUserRoutes);
 router.use('/workflow', workflowRoutes);
+router.use('/sync-logs', syncLogRoutes);
 
 module.exports = router;

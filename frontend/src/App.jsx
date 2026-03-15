@@ -15,6 +15,7 @@ import TempoAccountsPage from './pages/TempoAccountsPage';
 import JiraUsersPage from './pages/JiraUsersPage';
 import ProjectManagersPage from './pages/ProjectManagersPage';
 import ApprovalWorkflowPage from './pages/ApprovalWorkflowPage';
+import SyncLogsPage from './pages/SyncLogsPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import { authApi } from './services/api';
 
@@ -61,7 +62,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage user={user} isLoading={isLoading} oauthUrls={authApi} />} />
-      <Route path="/auth/callback" element={<AuthCallbackPage />} />
+      <Route path="/auth/callback" element={<AuthCallbackPage onAuthComplete={setUser} />} />
 
       <Route
         path="/"
@@ -120,6 +121,10 @@ export default function App() {
         <Route
           path="approval-workflow"
           element={<ApprovalWorkflowPage user={user} />}
+        />
+        <Route
+          path="sync-logs"
+          element={<SyncLogsPage user={user} />}
         />
         <Route
           path="approvals"
