@@ -93,11 +93,6 @@ export default function TempoAccountsPage({ user }) {
         ) : null}
       </div>
 
-      {!user?.isSuperAdmin ? (
-        <p className="text-sm text-amber-200">
-          Read-only mode. Only the configured super admin can run the Tempo accounts sync.
-        </p>
-      ) : null}
       {user?.isSuperAdmin && !user?.jiraConnected ? (
         <p className="text-sm text-amber-200">Connect Jira to run Tempo accounts sync.</p>
       ) : null}

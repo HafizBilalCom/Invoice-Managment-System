@@ -139,6 +139,7 @@ async function getInvoiceEntries(connection, { userId, projectId, timesheetEntry
      LEFT JOIN jira_issues j ON j.id = t.jira_issue_ref_id
      WHERE t.contractor_user_id = ?
        AND t.project_id = ?
+       AND t.source_deleted_at IS NULL
        AND t.id IN (?)
      ORDER BY t.work_date ASC, t.issue_key ASC, t.id ASC`,
     [userId, projectId, normalizedIds]

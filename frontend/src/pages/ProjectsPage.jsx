@@ -173,11 +173,6 @@ export default function ProjectsPage({ user }) {
       <p className="text-sm text-slate-400">
         Project catalog with linked timelog counts and hours for your account only.
       </p>
-      {!user?.isSuperAdmin ? (
-        <p className="text-sm text-amber-200">
-          Read-only mode. Only the configured super admin can run project and issue sync actions.
-        </p>
-      ) : null}
       {user?.isSuperAdmin && !user?.jiraConnected ? (
         <p className="text-sm text-amber-200">Connect Jira to run project and issue sync actions.</p>
       ) : null}
@@ -226,7 +221,7 @@ export default function ProjectsPage({ user }) {
               <th className="px-4 py-3">Your Timelog Count</th>
               <th className="px-4 py-3">Your Hours</th>
               <th className="px-4 py-3">Issues</th>
-              <th className="px-4 py-3">Issue Sync</th>
+              {user?.isSuperAdmin ? <th className="px-4 py-3">Issue Sync</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -247,8 +242,8 @@ export default function ProjectsPage({ user }) {
                     View Issues
                   </Link>
                 </td>
-                <td className="px-4 py-3">
-                  {user?.isSuperAdmin ? (
+                {user?.isSuperAdmin ? (
+                  <td className="px-4 py-3">
                     <button
                       type="button"
                       onClick={() => syncProjectIssues(project)}
@@ -257,16 +252,14 @@ export default function ProjectsPage({ user }) {
                     >
                       {syncingProjectId === project.id ? 'Syncing...' : 'Sync Issues'}
                     </button>
-                  ) : (
-                    <span className="text-xs text-slate-500">Super admin only</span>
-                  )}
-                </td>
+                  </td>
+                ) : null}
               </tr>
             ))}
 
             {filteredProjects.length === 0 && (
               <tr>
-                <td className="px-4 py-4 text-slate-400" colSpan={9}>
+                <td className="px-4 py-4 text-slate-400" colSpan={user?.isSuperAdmin ? 9 : 8}>
                   No projects found for your search.
                 </td>
               </tr>

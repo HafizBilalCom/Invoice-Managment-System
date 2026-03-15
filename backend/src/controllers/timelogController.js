@@ -1,6 +1,10 @@
 const db = require('../config/db');
 const { syncTimesheetsDirect } = require('../services/tempoService');
+const { getSyncCursor, upsertSyncCursor } = require('../services/syncCursorService');
 const logger = require('../utils/logger');
+
+const TEMPO_WORKLOG_SYNC_CURSOR_KEY = 'TEMPO_WORKLOGS_GLOBAL';
+const TEMPO_WORKLOG_INITIAL_FROM = String(process.env.TEMPO_WORKLOGS_INITIAL_FROM || '2026-01-01').slice(0, 10);
 
 function getExternalEntryId(entry, index) {
   return String(entry?.tempoWorklogId || entry?.worklogId || entry?.id || entry?.issue?.id || `tempo-${Date.now()}-${index}`);
@@ -326,8 +330,43 @@ async function mapJiraIssueReferences(connection, entries, requestId) {
   return jiraIssueRefMap;
 }
 
+async function mapAuthorUsers(connection, entries, requestId) {
+  const authorAccountIds = [...new Set(entries.map((entry) => mapAuthorAccountId(entry)).filter(Boolean))];
+  const authorUserMap = new Map();
+
+  if (authorAccountIds.length === 0) {
+    logger.info('Timelog sync: no author account ids found for user mapping', { requestId });
+    return authorUserMap;
+  }
+
+  const placeholders = authorAccountIds.map(() => '?').join(', ');
+  const [rows] = await connection.query(
+    `SELECT ju.account_id, u.id AS user_id
+     FROM jira_users ju
+     JOIN users u
+       ON LOWER(u.email) = LOWER(ju.email_address)
+     WHERE ju.account_id IN (${placeholders})`,
+    authorAccountIds
+  );
+
+  for (const row of rows) {
+    if (!row.account_id || !row.user_id) {
+      continue;
+    }
+    authorUserMap.set(String(row.account_id), Number(row.user_id));
+  }
+
+  logger.info('Timelog sync: author user mapping complete', {
+    requestId,
+    authorsSeen: authorAccountIds.length,
+    authorsLinked: authorUserMap.size
+  });
+
+  return authorUserMap;
+}
+
 async function getTimelogsForUser(accountId, from, to) {
-  const filters = ['te.author_account_id = ?'];
+  const filters = ['te.author_account_id = ?', 'te.source_deleted_at IS NULL'];
   const values = [accountId];
 
   if (from) {
@@ -343,7 +382,7 @@ async function getTimelogsForUser(accountId, from, to) {
   const [rows] = await db.query(
     `SELECT te.id, te.external_entry_id, te.author_account_id, te.work_date, te.hours, te.description,
             te.project_key, te.project_name, te.project_number, te.project_account_number,
-            te.issue_key, te.jira_issue_api_id, te.jira_issue_ref_id, te.created_at, te.updated_at,
+            te.issue_key, te.jira_issue_api_id, te.jira_issue_ref_id, te.created_at, te.updated_at, te.source_deleted_at,
             ji.issue_key AS linked_issue_key,
             p.id AS project_id, p.project_key AS linked_project_key, p.project_name AS linked_project_name,
             p.project_number AS linked_project_number, p.project_account_number AS linked_project_account_number
@@ -385,9 +424,15 @@ function getTimelogSyncState(userId) {
       requestId: null,
       startedAt: null,
       finishedAt: null,
+      mode: null,
       from: null,
       to: null,
+      updatedFrom: null,
+      nextCursor: null,
       syncedCount: 0,
+      deletedMarked: 0,
+      deletedMissing: 0,
+      skippedNoAuthorUser: 0,
       inserted: 0,
       updated: 0,
       unchanged: 0,
@@ -404,32 +449,93 @@ function getTimelogSyncState(userId) {
   return timelogSyncStateByUser.get(userId);
 }
 
-async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId }) {
+function mapDeletedEntryId(entry) {
+  if (!entry) {
+    return null;
+  }
+
+  return String(
+    entry.tempoWorklogId ||
+      entry.worklogId ||
+      entry.entityId ||
+      entry.id ||
+      entry.deletedObjectId ||
+      ''
+  ).trim() || null;
+}
+
+function mapDeletedEntryTimestamp(entry) {
+  return (
+    entry.deletedAt ||
+    entry.timestamp ||
+    entry.updatedAt ||
+    entry.createdAt ||
+    new Date().toISOString()
+  );
+}
+
+async function runTimelogSyncJob({ userId, jiraAccountId, requestId }) {
   const connection = await db.getConnection();
   let transactionStarted = false;
   const state = getTimelogSyncState(userId);
+  const syncStartedAt = new Date();
+  const syncStartedAtIso = syncStartedAt.toISOString();
 
   state.running = true;
   state.status = 'RUNNING';
   state.requestId = requestId;
-  state.startedAt = new Date().toISOString();
+  state.startedAt = syncStartedAtIso;
   state.finishedAt = null;
-  state.from = from;
-  state.to = to;
+  state.mode = null;
+  state.from = null;
+  state.to = null;
+  state.updatedFrom = null;
+  state.nextCursor = null;
   state.lastError = null;
+  state.syncedCount = 0;
+  state.deletedMarked = 0;
+  state.deletedMissing = 0;
+  state.skippedNoAuthorUser = 0;
+  state.inserted = 0;
+  state.updated = 0;
+  state.unchanged = 0;
+  state.skippedNoProjectReference = 0;
+  state.seenProjects = 0;
+  state.linkedProjects = 0;
+  state.unlinkedProjects = 0;
+  state.ambiguousProjectNumbers = 0;
+  state.totalHours = 0;
 
   try {
+    const cursor = await getSyncCursor(TEMPO_WORKLOG_SYNC_CURSOR_KEY, connection);
+    const updatedFrom = cursor?.cursor_value
+      ? new Date(cursor.cursor_value).toISOString()
+      : null;
+    const mode = updatedFrom ? 'INCREMENTAL' : 'INITIAL';
+    const from = updatedFrom ? null : TEMPO_WORKLOG_INITIAL_FROM;
+    const to = updatedFrom ? null : syncStartedAtIso.slice(0, 10);
+
+    state.mode = mode;
+    state.from = from;
+    state.to = to;
+    state.updatedFrom = updatedFrom;
+    state.nextCursor = syncStartedAtIso;
+
     const syncResult = await syncTimesheetsDirect({
-      accountId: jiraAccountId,
       from,
       to,
+      updatedFrom,
       requestId
     });
     const entries = syncResult.entries || [];
+    const deletedEntries = syncResult.deletedEntries || [];
 
     logger.info('Timelog sync: Tempo response received', {
       requestId,
+      mode,
+      updatedFrom,
       entriesCount: entries.length,
+      deletedEntriesCount: deletedEntries.length,
       totalHours: Number(syncResult.totalHours.toFixed(2))
     });
 
@@ -440,6 +546,7 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
     const projectCatalog = buildProjectCatalog(entries);
     const projectReconcile = await mapProjectsFromCatalog(connection, projectCatalog, requestId);
     const jiraIssueRefMap = await mapJiraIssueReferences(connection, entries, requestId);
+    const authorUserMap = await mapAuthorUsers(connection, entries, requestId);
 
     const projectIdByNumber = projectReconcile.projectIdMap;
 
@@ -447,6 +554,9 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
     let updated = 0;
     let unchanged = 0;
     let skippedNoProjectReference = 0;
+    let skippedNoAuthorUser = 0;
+    let deletedMarked = 0;
+    let deletedMissing = 0;
 
     for (let index = 0; index < entries.length; index += 1) {
       const entry = entries[index];
@@ -469,6 +579,7 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
         : mappedProject;
       const rawPayload = JSON.stringify(entry);
       const authorAccountId = mapAuthorAccountId(entry);
+      const contractorUserId = authorAccountId ? authorUserMap.get(authorAccountId) || null : null;
       const jiraIssueApiId = mapTempoIssueId(entry);
       const jiraIssueRefId = jiraIssueApiId ? jiraIssueRefMap.get(jiraIssueApiId) || null : null;
       const chainBreakReason = mappedProject.projectNumber
@@ -487,9 +598,20 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
         continue;
       }
 
+      if (!contractorUserId) {
+        logger.warn('Timelog sync: entry skipped, author user not resolved', {
+          requestId,
+          externalEntryId,
+          authorAccountId: authorAccountId || null,
+          issueKey: effectiveProject.issueKey || null
+        });
+        skippedNoAuthorUser += 1;
+        continue;
+      }
+
       const [existingRows] = await connection.query(
-        `SELECT id, author_account_id, project_id, project_key, project_name, project_number, project_account_number,
-                issue_key, jira_issue_api_id, jira_issue_ref_id, work_date, hours, description, raw_payload
+        `SELECT id, contractor_user_id, author_account_id, project_id, project_key, project_name, project_number, project_account_number,
+                issue_key, jira_issue_api_id, jira_issue_ref_id, work_date, hours, description, raw_payload, source_deleted_at
          FROM timesheet_entries
          WHERE external_entry_id = ?
          LIMIT 1`,
@@ -499,6 +621,7 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
       if (!existingRows[0]) {
         logger.info('Timelog sync: inserting new entry', { externalEntryId,
             userId,
+            contractorUserId,
             authorAccountId,
             projectId,
             projectKey: effectiveProject.projectKey,
@@ -514,11 +637,11 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
             rawPayload });
         await connection.query(
           `INSERT INTO timesheet_entries
-          (provider, external_entry_id, contractor_user_id, author_account_id, project_id, project_key, project_name, project_number, project_account_number, issue_key, jira_issue_api_id, jira_issue_ref_id, work_date, hours, description, raw_payload)
-          VALUES ('TEMPO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (provider, external_entry_id, contractor_user_id, author_account_id, project_id, project_key, project_name, project_number, project_account_number, issue_key, jira_issue_api_id, jira_issue_ref_id, work_date, hours, description, raw_payload, source_deleted_at)
+          VALUES ('TEMPO', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
           [
             externalEntryId,
-            userId,
+            contractorUserId,
             authorAccountId,
             projectId,
             effectiveProject.projectKey,
@@ -538,6 +661,7 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
       } else {
         const existing = existingRows[0];
         const hasChanges =
+          Number(existing.contractor_user_id || 0) !== Number(contractorUserId || 0) ||
           (existing.author_account_id || null) !== (authorAccountId || null) ||
           Number(existing.project_id || 0) !== Number(projectId || 0) ||
           (existing.project_key || null) !== (effectiveProject.projectKey || null) ||
@@ -550,12 +674,14 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
           toDateOnly(existing.work_date) !== toDateOnly(workDate) ||
           Number(existing.hours) !== Number(hours) ||
           (existing.description || '') !== description ||
+          existing.source_deleted_at !== null ||
           normalizePayload(existing.raw_payload) !== normalizePayload(rawPayload);
 
         if (hasChanges) {
           await connection.query(
             `UPDATE timesheet_entries
              SET project_id = ?,
+                 contractor_user_id = ?,
                  author_account_id = ?,
                  project_key = ?,
                  project_name = ?,
@@ -567,10 +693,12 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
                  work_date = ?,
                  hours = ?,
                  description = ?,
-                 raw_payload = ?
+                 raw_payload = ?,
+                 source_deleted_at = NULL
              WHERE id = ?`,
             [
               projectId,
+              contractorUserId,
               authorAccountId,
               effectiveProject.projectKey,
               effectiveProject.projectName,
@@ -600,8 +728,31 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
           inserted,
           updated,
           unchanged,
+          skippedNoAuthorUser,
           skippedNoProjectReference
         });
+      }
+    }
+
+    for (const deletedEntry of deletedEntries) {
+      const deletedExternalEntryId = mapDeletedEntryId(deletedEntry);
+      if (!deletedExternalEntryId) {
+        continue;
+      }
+
+      const deletedAt = mapDeletedEntryTimestamp(deletedEntry);
+      const [result] = await connection.query(
+        `UPDATE timesheet_entries
+         SET source_deleted_at = ?
+         WHERE external_entry_id = ?
+           AND source_deleted_at IS NULL`,
+        [deletedAt, deletedExternalEntryId]
+      );
+
+      if (Number(result.affectedRows || 0) > 0) {
+        deletedMarked += Number(result.affectedRows || 0);
+      } else {
+        deletedMissing += 1;
       }
     }
 
@@ -615,9 +766,15 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
           from,
           to,
           syncedCount: entries.length,
+          mode,
+          updatedFrom,
+          nextCursor: syncStartedAtIso,
           inserted,
           updated,
           unchanged,
+          skippedNoAuthorUser,
+          deletedMarked,
+          deletedMissing,
           skippedNoProjectReference,
           seenProjects: projectReconcile.seenProjects,
           linkedProjects: projectReconcile.linkedProjects,
@@ -636,6 +793,9 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
       inserted,
       updated,
       unchanged,
+      skippedNoAuthorUser,
+      deletedMarked,
+      deletedMissing,
       skippedNoProjectReference,
       seenProjects: projectReconcile.seenProjects,
       linkedProjects: projectReconcile.linkedProjects,
@@ -644,6 +804,23 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
       insertedProjects: projectReconcile.insertedProjects,
       updatedProjects: projectReconcile.updatedProjects
     });
+
+    await upsertSyncCursor(
+      {
+        cursorKey: TEMPO_WORKLOG_SYNC_CURSOR_KEY,
+        cursorValue: syncStartedAt,
+        metadata: {
+          mode,
+          updatedFrom,
+          initialFrom: TEMPO_WORKLOG_INITIAL_FROM,
+          syncedCount: entries.length,
+          deletedMarked,
+          deletedMissing,
+          requestId
+        }
+      },
+      connection
+    );
 
     const timelogs = await getTimelogsForUser(jiraAccountId, from, to);
     logger.info('Timelog sync: response ready', {
@@ -654,10 +831,16 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
     const result = {
       from,
       to,
+      updatedFrom,
+      nextCursor: syncStartedAtIso,
+      mode,
       syncedCount: entries.length,
       inserted,
       updated,
       unchanged,
+      skippedNoAuthorUser,
+      deletedMarked,
+      deletedMissing,
       skippedNoProjectReference,
       seenProjects: projectReconcile.seenProjects,
       linkedProjects: projectReconcile.linkedProjects,
@@ -672,6 +855,9 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
 
     state.status = 'COMPLETED';
     state.syncedCount = result.syncedCount;
+    state.deletedMarked = result.deletedMarked;
+    state.deletedMissing = result.deletedMissing;
+    state.skippedNoAuthorUser = result.skippedNoAuthorUser;
     state.inserted = result.inserted;
     state.updated = result.updated;
     state.unchanged = result.unchanged;
@@ -712,21 +898,14 @@ async function runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId })
 
 const syncTimelogs = async (req, res) => {
   const requestId = `timelog-sync-${Date.now()}`;
-  const { from, to } = req.body;
   const userId = req.user?.id;
   const jiraAccountId = req.jiraConnection?.external_account_id;
 
   logger.info('Timelog sync trigger: request received', {
     requestId,
     userId,
-    jiraAccountId,
-    from,
-    to
+    jiraAccountId
   });
-
-  if (!from || !to) {
-    return res.status(400).json({ message: 'from and to dates are required' });
-  }
 
   const state = getTimelogSyncState(userId);
   if (state.running) {
@@ -738,7 +917,8 @@ const syncTimelogs = async (req, res) => {
 
   setImmediate(async () => {
     try {
-      await runTimelogSyncJob({ userId, jiraAccountId, from, to, requestId });
+      const { runTimelogSyncManagedJob } = require('../jobs/timelogSyncJob');
+      await runTimelogSyncManagedJob({ trigger: 'manual', requestId, userId, jiraAccountId });
     } catch (error) {
       logger.error('Timelog sync background job failed', {
         requestId,
@@ -780,6 +960,7 @@ const listTimelogs = async (req, res) => {
 };
 
 module.exports = {
+  runTimelogSyncJob,
   syncTimelogs,
   getSyncTimelogsStatus,
   listTimelogs

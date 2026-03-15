@@ -98,12 +98,6 @@ export default function JiraUsersPage({ user }) {
           </button>
         ) : null}
       </div>
-
-      {!user?.isSuperAdmin ? (
-        <p className="text-sm text-amber-200">
-          Read-only mode. Only the configured super admin can run Jira users sync.
-        </p>
-      ) : null}
       {user?.isSuperAdmin && !user?.jiraConnected ? (
         <p className="text-sm text-amber-200">Connect Jira to run Jira users sync.</p>
       ) : null}

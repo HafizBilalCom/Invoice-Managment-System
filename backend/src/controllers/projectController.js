@@ -293,6 +293,7 @@ const listProjects = async (req, res) => {
        LEFT JOIN timesheet_entries te
          ON te.project_id = p.id
         AND te.contractor_user_id = ?
+        AND te.source_deleted_at IS NULL
        GROUP BY p.id, p.project_key, p.project_name, p.project_number, p.project_account_number, p.created_at
        ORDER BY user_total_hours DESC, p.project_name ASC`,
       [userId]

@@ -1,15 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { invoiceApi, profileApi, timelogApi } from '../services/api';
 
-const initialState = {
-  from: '',
-  to: ''
-};
-
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function addDays(date, days) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
@@ -71,7 +62,6 @@ function getRangeFromPreset(preset) {
 }
 
 export default function InvoiceCreatePage({ user }) {
-  const [form, setForm] = useState({ ...initialState, to: todayIso() });
   const [timelogs, setTimelogs] = useState([]);
   const [message, setMessage] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
@@ -202,12 +192,12 @@ export default function InvoiceCreatePage({ user }) {
 
         if (!status.running) {
           setIsSyncing(false);
-          const rows = await timelogApi.list({ from: form.from, to: form.to });
+          const rows = await timelogApi.list();
           setTimelogs(rows);
 
           if (status.status === 'COMPLETED') {
             setMessage(
-              `Timelog async sync completed. Synced: ${status.syncedCount}, Inserted: ${status.inserted}, Updated: ${status.updated}, Unchanged: ${status.unchanged}, Skipped(no project ref): ${status.skippedNoProjectReference}, Linked projects: ${status.linkedProjects}, Unlinked: ${status.unlinkedProjects}, Hours: ${status.totalHours}.`
+              `Timelog async sync completed. Mode: ${status.mode || '-'}, Synced: ${status.syncedCount}, Inserted: ${status.inserted}, Updated: ${status.updated}, Unchanged: ${status.unchanged}, Deleted marked: ${status.deletedMarked || 0}, Skipped(no project ref): ${status.skippedNoProjectReference}, Linked projects: ${status.linkedProjects}, Unlinked: ${status.unlinkedProjects}, Hours: ${status.totalHours}.`
             );
           } else {
             setMessage(
@@ -222,12 +212,7 @@ export default function InvoiceCreatePage({ user }) {
     }, 3000);
 
     return () => clearInterval(timer);
-  }, [isSyncing, form.from, form.to]);
-
-  const onChange = (event) => {
-    const { name, value } = event.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
-  };
+  }, [isSyncing]);
 
   const onSubmit = async (event) => {
     event.preventDefault();
@@ -235,7 +220,7 @@ export default function InvoiceCreatePage({ user }) {
     setMessage('Starting async timelog sync from Jira/Tempo...');
 
     try {
-      const response = await timelogApi.sync(form);
+      const response = await timelogApi.sync();
       const status = await timelogApi.getSyncStatus();
       setSyncStatus(status);
       setMessage(
@@ -302,52 +287,29 @@ export default function InvoiceCreatePage({ user }) {
       <form className="grid gap-4" onSubmit={onSubmit}>
         <h2 className="text-xl font-semibold text-white">Step 1: Sync Timelogs</h2>
         <p className="text-sm text-slate-400">
-          Your connected Jira account ID is used automatically. Select date range and sync.
+          First sync runs from 1 Jan 2026 to now. After that, Tempo `updatedFrom` watermarking is used automatically.
         </p>
-        {!user?.isSuperAdmin ? (
-          <p className="text-sm text-amber-200">
-            Read-only sync mode. Only the configured super admin can start timelog sync jobs. You can still review
-            existing timelogs and create invoices from them.
-          </p>
-        ) : null}
         {user?.isSuperAdmin && !user?.jiraConnected ? (
           <p className="text-sm text-amber-200">
             Connect Jira to run timelog sync. Other invoice actions remain available.
           </p>
         ) : null}
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <input
-            className="rounded-lg border border-[#2D3748] bg-[#1A2233] px-3 py-2 text-white"
-            name="from"
-            type="date"
-            value={form.from}
-            onChange={onChange}
-            required
-          />
-          <input
-            className="rounded-lg border border-[#2D3748] bg-[#1A2233] px-3 py-2 text-white"
-            name="to"
-            type="date"
-            value={form.to}
-            onChange={onChange}
-            required
-          />
-        </div>
-
-        <button
-          className="w-fit rounded-lg bg-[#3C50E0] px-4 py-2 font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
-          type="submit"
-          disabled={!user?.isSuperAdmin || !user?.jiraConnected || isSyncing}
-        >
-          {isSyncing ? 'Sync In Progress...' : 'Sync Timelogs (Async)'}
-        </button>
+        {user?.isSuperAdmin ? (
+          <button
+            className="w-fit rounded-lg bg-[#3C50E0] px-4 py-2 font-semibold text-white hover:bg-[#3043cc] disabled:cursor-not-allowed disabled:opacity-60"
+            type="submit"
+            disabled={!user?.jiraConnected || isSyncing}
+          >
+            {isSyncing ? 'Sync In Progress...' : 'Sync Timelogs (Async)'}
+          </button>
+        ) : null}
         <p className="text-sm text-slate-300">{message}</p>
         {syncStatus && (
           <p className="text-xs text-slate-400">
-            Job status: {syncStatus.status || 'UNKNOWN'} | Processed: {syncStatus.syncedCount || 0} | Inserted:{' '}
-            {syncStatus.inserted || 0} | Updated: {syncStatus.updated || 0} | Skipped:{' '}
-            {syncStatus.skippedNoProjectReference || 0}
+            Job status: {syncStatus.status || 'UNKNOWN'} | Mode: {syncStatus.mode || '-'} | Synced:{' '}
+            {syncStatus.syncedCount || 0} | Inserted: {syncStatus.inserted || 0} | Updated: {syncStatus.updated || 0}
+            {' '}| Deleted: {syncStatus.deletedMarked || 0} | Skipped: {syncStatus.skippedNoProjectReference || 0}
           </p>
         )}
       </form>

@@ -4,6 +4,7 @@ const app = require('./app');
 const db = require('./config/db');
 const { runMigrations } = require('./utils/migrate');
 const { startJiraUsersSyncCrons, runJiraUsersStartupSync } = require('./jobs/jiraUserSyncJob');
+const { startTimelogSyncCrons, runTimelogStartupSync } = require('./jobs/timelogSyncJob');
 const { startTempoAccountSyncCrons, runTempoAccountStartupSync } = require('./jobs/tempoAccountSyncJob');
 const { startProjectSyncCrons, runProjectAndIssuesStartupSync } = require('./jobs/projectSyncJob');
 
@@ -23,6 +24,8 @@ async function startServer() {
     runTempoAccountStartupSync();
     startJiraUsersSyncCrons();
     runJiraUsersStartupSync();
+    startTimelogSyncCrons();
+    runTimelogStartupSync();
     startProjectSyncCrons();
     runProjectAndIssuesStartupSync();
   } catch (error) {
